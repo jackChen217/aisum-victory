@@ -23,7 +23,7 @@ import httpx
 
 from .. import llm_client
 from ..llm_client import LlmError
-from . import planner
+from . import matching, planner
 from .optimizer import diff_plans, optimize
 
 log = logging.getLogger(__name__)
@@ -66,13 +66,18 @@ class SessionNotFound(KeyError):
 
 # ── public API ───────────────────────────────────────────────────────────
 
+ALTERNATIVES = 3
+
+
 async def plan(uid: str, image_url: str, scenario: str, budget: float,
                owned: list[str] | None = None, notes: str = "",
                gender: str | None = None) -> dict:
     """`scenario` "auto" lets image search decide (outfit if it detects clothing, else
     desk). `gender` is the user's own choice (F / M), used for outfit only.
-    LLM calls: outfit = review + one category check per slot + explanation;
-    desk = slot planning + category checks + explanation."""
+
+    LLM calls: outfit = review + explanation (category check by keyword rules, colour
+    and text matching without an LLM); desk = slot planning + one category check per
+    slot (first 10 candidates) + explanation."""
     owned = list(owned or [])
     gender = gender if scenario in ("auto", "outfit") else None
     slots = await planner.plan_slots(image_url, scenario, notes, budget=budget,
@@ -80,24 +85,30 @@ async def plan(uid: str, image_url: str, scenario: str, budget: float,
     scenario = planner.scenario_of(slots) if scenario == "auto" else scenario
     report: dict = {}
     if scenario == "outfit":
-        slots = await planner.review_outfit(image_url, slots, report=report)
-    candidates = await planner.find_candidates(slots, budget, report=report)
-    candidates = await planner.check_categories(slots, candidates, report=report)
-    result = optimize(slots, candidates, budget, owned)
+        slots, candidates, scores = await planner.outfit_candidates(
+            image_url, slots, budget, report=report)
+    else:
+        candidates = await planner.find_candidates(slots, budget, report=report)
+        candidates = await planner.check_categories(slots, candidates, report=report)
+        candidates, scores = _text_ranked(slots, candidates)
+    quality = {k: [m["quality"] for m in v] for k, v in scores.items()}
+    result = optimize(slots, candidates, budget, owned, quality)
     explanation = await _explain(_plan_prompt(scenario, notes, budget, result),
                                  _fallback(result, budget))
 
     session_id = uuid.uuid4().hex
     _save(uid, session_id, {
         "scenario": scenario, "image_url": image_url, "notes": notes, "gender": gender,
-        "search_budget": budget, "budget": budget, "owned": owned,
-        "slots": slots, "candidates": candidates, "plan": result["plan"],
+        "search_budget": budget, "budget": budget, "owned": owned, "pins": {},
+        "slots": slots, "candidates": candidates, "scores": scores, "plan": result["plan"],
     })
     return {
         "session_id": session_id,
         "scenario": scenario,
         "slots": [{k: s[k] for k in _PUBLIC_SLOT_KEYS if k in s} for s in slots],
         "plan": result["plan"],
+        "match": _matches(result["plan"], candidates, scores),
+        "alternatives": _alternatives(result["plan"], candidates, scores),
         "dropped": result["dropped"],
         "infeasible": result["infeasible"],
         "total": result["total"],
@@ -107,31 +118,94 @@ async def plan(uid: str, image_url: str, scenario: str, budget: float,
 
 
 async def replan(uid: str, session_id: str, budget: float,
-                 owned: list[str] | None = None) -> dict:
+                 owned: list[str] | None = None,
+                 pins: dict[str, str] | None = None) -> dict:
+    """Re-optimize the saved candidates. `pins` {slot: p_key} must be in the plan:
+    that slot is filled with that product and the rest of the budget goes to the
+    others. Pins are kept for later re-plans; pass {} to clear them, None to keep."""
     s = SESSIONS.get((uid, session_id))
     if s is None:
         raise SessionNotFound(session_id)
     owned = list(owned if owned is not None else s["owned"])
-    result = optimize(s["slots"], s["candidates"], budget, owned)
+    pins = dict(s.get("pins") or {}) if pins is None else dict(pins)
+    unknown = {slot: key for slot, key in pins.items()
+               if not any(p.get("p_key") == key for p in s["candidates"].get(slot, []))}
+    for slot in unknown:
+        pins.pop(slot)
+
+    slots, candidates, quality = _apply_pins(s["slots"], s["candidates"], s["scores"], pins)
+    result = optimize(slots, candidates, budget, owned, quality)
     changes = diff_plans(s["plan"], result["plan"])
     explanation = await _explain(_replan_prompt(s, budget, owned, result, changes),
                                  _fallback(result, budget, changes))
 
-    s.update(budget=budget, owned=owned, plan=result["plan"], touched=time.time())
+    s.update(budget=budget, owned=owned, pins=pins, plan=result["plan"],
+             touched=time.time())
     out = {
         "session_id": session_id,
         "plan": result["plan"],
+        "match": _matches(result["plan"], s["candidates"], s["scores"]),
+        "alternatives": _alternatives(result["plan"], s["candidates"], s["scores"]),
+        "pins": pins,
         "dropped": result["dropped"],
         "infeasible": result["infeasible"],
         "total": result["total"],
         "changes": changes,
         "explanation": explanation,
     }
+    if unknown:
+        out["ignored_pins"] = unknown
     if budget > s["search_budget"]:
         # Candidates were searched with max_price = the first budget, so nothing pricier
         # is in them. Say so rather than let a bigger budget look like it changed nothing.
         out["note"] = (f"Candidates were searched up to ${s['search_budget']:g}; "
                        "a new plan is needed to look at pricier items.")
+    return out
+
+
+def _text_ranked(slots: list[dict], candidates: dict[str, list[dict]]):
+    """Desk / renter: rank + text (BM25 and attribute words); no colour."""
+    ordered, scores = {}, {}
+    for slot in slots:
+        scored = matching.score_slot(slot, candidates.get(slot["slot"], []), None, {})
+        ordered[slot["slot"]] = [p for p, _ in scored]
+        scores[slot["slot"]] = [m for _, m in scored]
+    return ordered, scores
+
+
+def _apply_pins(slots, candidates, scores, pins):
+    """A pinned slot becomes required with only the pinned product as candidate."""
+    slots = [dict(sl, required=True) if sl["slot"] in pins else sl for sl in slots]
+    candidates, quality = dict(candidates), {k: [m["quality"] for m in v]
+                                             for k, v in scores.items()}
+    for slot, key in pins.items():
+        i = next(i for i, p in enumerate(candidates[slot]) if p.get("p_key") == key)
+        candidates[slot] = [candidates[slot][i]]
+        quality[slot] = [quality[slot][i]]
+    return slots, candidates, quality
+
+
+def _matches(plan: dict, candidates: dict, scores: dict) -> dict:
+    """{slot: {"rank", "colour", "text", "quality"}} for the picked products."""
+    out = {}
+    for slot, product in plan.items():
+        for p, m in zip(candidates.get(slot, []), scores.get(slot, [])):
+            if p is product or p.get("p_key") == product.get("p_key"):
+                out[slot] = m
+                break
+    return out
+
+
+def _alternatives(plan: dict, candidates: dict, scores: dict) -> dict:
+    """Up to ALTERNATIVES other candidates per slot, best quality first. Slots that are
+    not in the plan get them too, so a dropped item can still be pinned."""
+    out = {}
+    for slot, items in candidates.items():
+        picked = (plan.get(slot) or {}).get("p_key")
+        alts = [{"product": p, "match": m}
+                for p, m in zip(items, scores.get(slot, []))
+                if p.get("p_key") != picked and p.get("product_price") is not None]
+        out[slot] = alts[:ALTERNATIVES]
     return out
 
 

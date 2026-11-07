@@ -35,27 +35,34 @@ def _cents(price) -> int | None:
     return round(value * 100)
 
 
-def _usable(products: list[dict]) -> list[tuple[dict, int]]:
-    """Drop products with no price and refurbished ("Renewed") listings; keep order."""
-    out = []
-    for p in products or []:
+def _usable(products: list[dict], quality: list[float] | None = None
+            ) -> tuple[list[tuple[dict, int]], list[float] | None]:
+    """Drop products with no price and refurbished ("Renewed") listings; keep order
+    (and the matching quality values, when given)."""
+    out, qs = [], []
+    for i, p in enumerate(products or []):
         cents = _cents(p.get("product_price"))
         if cents is None or "renewed" in (p.get("product_name") or "").lower():
             continue
         out.append((p, cents))
-    return out
+        if quality is not None:
+            qs.append(quality[i])
+    return out, (qs if quality is not None else None)
 
 
-def _options(products: list[tuple[dict, int]]) -> list[tuple[int, float, dict]]:
-    """(cents, quality, product) per candidate, quality = 1/(1+rank), rank 0 = first.
+def _options(products: list[tuple[dict, int]],
+             quality: list[float] | None = None) -> list[tuple[int, float, dict]]:
+    """(cents, quality, product) per candidate. Quality is given (matching.py's
+    rank + colour + text), or 1/(1+rank) with rank 0 = first.
 
-    Among candidates with the same price only the best-ranked one can ever be chosen,
-    so the rest are dropped here to keep the DP small.
+    Among candidates with the same price only the best one can ever be chosen, so the
+    rest are dropped here to keep the DP small.
     """
     best: dict[int, tuple[int, float, dict]] = {}
     for rank, (p, cents) in enumerate(products):
-        if cents not in best:
-            best[cents] = (cents, 1 / (1 + rank), p)
+        q = quality[rank] if quality is not None else 1 / (1 + rank)
+        if cents not in best or q > best[cents][1]:
+            best[cents] = (cents, q, p)
     return list(best.values())
 
 
@@ -98,7 +105,8 @@ def _solve(order: list[tuple[str, bool, float, list]], budget_c: int):
 
 
 def optimize(slots: list[dict], candidates: dict[str, list[dict]], budget: float,
-             owned: list[str] | None = None) -> dict:
+             owned: list[str] | None = None,
+             quality: dict[str, list[float]] | None = None) -> dict:
     """Choose at most one product per slot, total price <= budget, maximising
     sum(weight * quality).
 
@@ -106,6 +114,7 @@ def optimize(slots: list[dict], candidates: dict[str, list[dict]], budget: float
     candidates: {"keyboard": [product, ...], ...} — in the order the search ranked them
     budget:     US dollars
     owned:      slot names the user already has; those slots are skipped entirely
+    quality:    optional {slot: [0-1 per candidate]}; default 1/(1+rank)
 
     Required slots must be filled. When they cannot all be — no usable candidate, or
     together they cost more than the budget — the ones that cannot are reported in
@@ -133,7 +142,8 @@ def optimize(slots: list[dict], candidates: dict[str, list[dict]], budget: float
         if name in owned_set:
             dropped.append({"slot": name, "reason": OWNED})
             continue
-        options = _options(_usable(candidates.get(name, [])))
+        q = (quality or {}).get(name)
+        options = _options(*_usable(candidates.get(name, []), q))
         if not options:
             dropped.append({"slot": name, "reason": NO_CANDIDATES})
             if required:

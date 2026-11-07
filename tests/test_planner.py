@@ -339,7 +339,7 @@ def test_review_unconfirmed_detection_is_kept_and_noted(monkeypatch):
     report = {}
     slots = asyncio.run(planner.review_outfit("https://x", outfit_slots(), report))
     assert [s["slot"] for s in slots] == ["jacket", "shorts", "shoe"]
-    assert report["_review"] == {"corrected": [], "added": [], "unconfirmed": ["shorts"]}
+    assert report["_review"] == {"corrected": [], "added": [], "removed": [], "unconfirmed": ["shorts"]}
 
 
 @pytest.mark.parametrize("reply", ["no json here", '{"keep": "all"', planner.LlmError("down")])
@@ -386,3 +386,81 @@ def test_corrected_results_go_before_image_results(monkeypatch):
     monkeypatch.setattr(planner, "search_text", fake_text)
     out = asyncio.run(planner.find_candidates([slot], 150, {}))
     assert [x["p_key"] for x in out["jacket"]] == ["t1", "j1"]
+
+
+
+def test_review_drops_background_items(monkeypatch):
+    monkeypatch.setattr(planner.llm_client, "chat", review_reply(
+        {"keep": [1, 2, 3], "correct": [], "drop": [0], "missing": []}))
+    report = {}
+    slots = asyncio.run(planner.review_outfit("https://x", outfit_slots(), report))
+    assert [s["slot"] for s in slots] == ["shorts", "shoe"]
+    assert report["_review"]["removed"] == [{"slot": "jacket", "was": "brown jacket"}]
+
+
+def test_review_prompt_limits_to_the_person():
+    assert "WEARING or HOLDING" in planner._REVIEW_PROMPT
+    assert "rack" in planner._REVIEW_PROMPT and '"drop"' in planner._REVIEW_PROMPT
+
+
+def test_desk_category_check_looks_at_first_ten(monkeypatch):
+    seen = []
+
+    async def chat(messages, tools=None):
+        seen.append(messages[0]["content"].count('"id":'))
+        return {"message": {"content": '{"reject": [0]}'}}
+
+    monkeypatch.setattr(planner.llm_client, "chat", chat)
+    cands = {"desk": [p(f"d{i}", f"Desk {i}") for i in range(14)]}
+    out = asyncio.run(planner.check_categories([{"slot": "desk", "query": "desk"}], cands, {}))
+    assert seen == [10]
+    assert [x["p_key"] for x in out["desk"]] == [f"d{i}" for i in range(1, 10)]
+
+
+# ── outfit pipeline ──────────────────────────────────────────────────────
+
+def test_outfit_candidates_runs_review_alongside_searches(monkeypatch):
+    order = []
+
+    async def chat(messages, tools=None):
+        order.append("review-start")
+        await asyncio.sleep(0.05)
+        order.append("review-end")
+        return {"message": {"content": json.dumps({
+            "keep": [2, 3], "correct": [{"id": 0, "description": "rust red duffle coat"}],
+            "drop": [1], "missing": [{"slot": "socks", "layer": "socks",
+                                      "description": "white crew socks"}]})}}
+
+    async def fake_text(query, *, domain=None, min_price=None, max_price=None, gender=None, top_k=10):
+        order.append(f"text:{query}")
+        names = {"brown jacket": ["Brown Zip Jacket"], "black shoe": ["Black Leather Loafers"],
+                 "rust red duffle coat": ["Rust Duffle Coat with Toggles", "Red Wool Scarf"],
+                 "white crew socks": ["White Crew Socks 6 Pack"], "black shorts": ["Black Shorts"]}
+        return {"results": [p(f"{query[:4]}{i}", n) for i, n in enumerate(names.get(query, []))]}
+
+    async def no_photo(url):
+        raise RuntimeError("offline")
+
+    async def no_palettes(urls, fetch):
+        return {u: None for u in urls}
+
+    monkeypatch.setattr(planner.llm_client, "chat", chat)
+    monkeypatch.setattr(planner, "search_text", fake_text)
+    monkeypatch.setattr(planner, "_photo", no_photo)
+    monkeypatch.setattr(planner.matching, "product_palettes", no_palettes)
+    report = {}
+    slots, cands, scores = asyncio.run(planner.outfit_candidates(
+        "https://x/o.jpg", outfit_slots(), 150, report))
+
+    # Early searches start before the review answers; the corrected one after it.
+    assert order.index("text:black shoe") < order.index("review-end")
+    assert order.index("text:rust red duffle coat") > order.index("review-end")
+    assert [s["slot"] for s in slots] == ["jacket", "shoe", "socks"]   # shorts dropped
+    # Corrected: its text results first; the scarf fails the coat keyword rule.
+    assert [x["product_name"] for x in cands["jacket"]][0] == "Rust Duffle Coat with Toggles"
+    assert "Red Wool Scarf" in report["jacket"]["category_rejected"]
+    # Kept slot: image results, then its early text search.
+    assert {x["p_key"] for x in cands["shoe"]} == {"s1", "blac0"}  # s2: near-duplicate name
+    assert [x["product_name"] for x in cands["socks"]] == ["White Crew Socks 6 Pack"]
+    assert all(len(scores[k]) == len(cands[k]) for k in cands)
+    assert report["_colour"]["error"].startswith("photo not loaded")

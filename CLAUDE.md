@@ -66,17 +66,19 @@
   - 场景自动判断（默认 `scenario: "auto"`）：先调 `search_products_by_image`，有 detection 就是 outfit，没有（返回 `note`）就按 desk 让 DeepSeek 拆清单。页面上保留一个小的手动覆盖选项。
   - outfit：`search_products_by_image`（带 `max_price` = 预算），item 和 item_detail 都相同的 detection（比如左右鞋）合并成一个 slot。
   - 每个 slot 用 `search_products_by_text` 并发搜候选（max_price = 预算，top_k = 15），清洗：按 p_key 去重、名字近似重复只留第一个、去掉乱码名字。
-  - 穿搭审核（`review_outfit`，替换了原来的自我纠错，一次 DeepSeek 看图调用）：把原图和 detections（item、item_detail、box）一起发过去，返回 keep / correct / missing。correct 的用精确描述做文字搜索（domain = fashion、gender、max_price），结果排在图片结果前面；missing 的（最多 3 件）新增为可选 slot 再文字搜索。失败或 JSON 解析不了就按原 detections 继续。`report["_review"]` 记录 corrected、added、unconfirmed；页面上显示 "The agent added N items and corrected M descriptions"。
-  - 类别检查：每个 slot 一次 DeepSeek 调用，最多 4 个并行，去掉类别不对的候选（比如 keyboard 里的键帽、speaker 里的替换喇叭）；某个 slot 失败就保留它的原候选。
+  - 穿搭审核（`review_outfit`，替换了原来的自我纠错，一次 DeepSeek 看图调用，和早期文字搜索、原图下载、商品图取色并行）：把原图和 detections（item、item_detail、box）一起发过去，返回 keep / correct / drop / missing；只算这个人身上穿着或拿着的，背景里挂着的（比如衣架上的帽子）会被 drop。correct 的用精确描述做文字搜索（domain = fashion、gender、max_price），结果排在图片结果前面；missing 的（最多 3 件）新增为可选 slot 再文字搜索。失败或 JSON 解析不了就按原 detections 继续。`report["_review"]` 记录 corrected、added、unconfirmed；页面上显示 "The agent added N items and corrected M descriptions"。
+  - 类别检查：outfit 用关键词 + 同义词规则（`matching.category_filter`，不调 LLM）；desk 每个 slot 一次 DeepSeek 调用（最多 4 个并行），只检查并保留前 10 个候选；某个 slot 失败就保留它的原候选。
+  - 匹配打分（`src/agent/matching.py`，不调 LLM）：quality = 0.4 × 排名分 + 0.35 × 颜色相似度 + 0.25 × 文字分（BM25 + 属性词），缺项时权重分给其他项。颜色：按 detection 的 box 裁原图，Lab 空间 k-means 取 3 个主色；每个 slot 前 15 个商品图经图片代理下载（128px、缓存、并发），去白底后同样取主色，比较色差；审核新增的 slot 没有 box，就用描述里的颜色词对比商品主色的颜色名。属性词（striped、plaid、leather、high-top…）商品名里有加分、没有扣分。
   - 性别：outfit 可以传用户自己选的 `gender`（F / M），用于图片搜索和之后的文字搜索；不选就是 Any，绝不自己推断。
   - 乱码：商品名里的 mojibake（`â€`、`Ã©`、`â\x80\x91` 等）先修复成正常字符，修不好的商品才去掉。
   - AISUM 调用目前是 `planner.py` 里的薄适配函数（`search_text`、`search_image`，返回原始 dict），标了 `TODO: 换成 Yining 的 search.py`。
 - `src/agent/orchestrator.py`：会话存在内存（按 uid + session_id，每人最多 20 个，重启或换 Cloud Run 实例会丢）；`plan` 和 `replan`（只重新优化，不重新搜索）；每次一次 DeepSeek 调用写解释，只能用商品名里实际有的词，出现商品名里没有的颜色、材质、图案词就重试一次，还不行就换成固定的一句话。
-- `src/main.py`：`POST /api/plan`、`POST /api/replan`（都要登录），`GET /ghostcart`。
+- `src/main.py`：`POST /api/plan`、`POST /api/replan`（都要登录，replan 有 `pin: {slot: p_key}`，被 pin 的商品必须选上），`GET /ghostcart`。plan / replan 返回 `match`（选中商品的 rank / colour / text / quality）和 `alternatives`（每个 slot 3 个备选）。
+- 架构图：`docs/architecture.md`（Mermaid 时序图和用例图）。
 - `static/ghostcart.html`（`/ghostcart`）：测试页面，有场景选择（desk / outfit）、outfit 的性别选项（Any / Women / Men）、图片上传和链接、预算、三个示例按钮、商品卡片、总价和解释、预算滑块和换货标记（Swapped / Added / Removed）。
 - Lookboard（只在 outfit）：结果区上方，左边原图，右边按穿着位置排列（帽子/配饰 → 外套/上衣 → 裤子/裙子 → 鞋，包在旁边），下面是总价和预算；改预算会跟着更新。"Download image" 用 canvas 导出 1200×900 PNG，商品图通过 `GET /api/lookboard-image?session_id=&slot=` 代理（只能取自己会话里的图，只允许 https 公网地址、不跟随跳转）。
 - 图片上传：`POST /api/upload`（要登录），请求体是 JPG/PNG 原始字节（最大 8 MB，按文件头判断类型），存到 bucket `aisum-hackathon-juliet-uploads`（us-central1、uniform access、allUsers 可读、1 天自动删除）的 `uploads/<随机名>`，返回 `https://storage.googleapis.com/...` 公开链接；用 google-cloud-storage + ADC。页面上有上传按钮、拖拽和 ⌘V 粘贴，上传后自动填链接并显示预览。部署到 Cloud Run 时服务账号要有这个 bucket 的 objectCreator 权限，环境变量加 `UPLOAD_BUCKET`。
-- 测试：`.venv/bin/python -m pytest`，105 个用例，全部离线。
+- 测试：`.venv/bin/python -m pytest`，129 个用例，全部离线。
 
 实测（Python 直接调 orchestrator）：
 - 电竞桌面 $350：7–8 件，第一次出方案约 50 秒（类别检查那次 DeepSeek 调用约 35 秒）；预算改成 $250 后重新规划约 6 秒。
@@ -96,7 +98,9 @@
 - 正式前端页面
 - pitch deck 和拉用户计划
 - 已知问题：
-  - 加了穿搭审核后 outfit 出方案要 72–90 秒（改之前 26–31 秒）：审核那次调用约 38 秒，类别检查 35–43 秒（slot 变多、每个 slot 候选变长，6–7 个 slot 要分两轮）。需要提速。
+  - outfit 出方案 23–53 秒（类别检查不再调 LLM 后），大头是审核那次调用（约 25–38 秒）。
+  - 图案还会输：属性词只占 quality 的约 12%，排名靠前、颜色接近的纯色 T 恤会赢过条纹 T 恤（条纹的在备选里）。可以考虑描述里有图案词时，把没有图案的候选当硬过滤。
+  - 浅色在暖光下会被读成灰色（粉白 T 恤、浅色牛仔裤）；里层衣服的 box 和外套重叠，颜色会混进外套的颜色。
   - 审核的描述有时不对：截图里的竖条纹衬衫被写成 horizontal striped，羊毛 duffle coat 被写成 corduroy jacket。
   - 场景匹配的 score 全在 0.97 以上，不能用来排序。
   - 文字搜索偶尔把不相关或不合适的商品排得靠前（比如单手键盘）。

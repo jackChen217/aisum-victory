@@ -20,9 +20,12 @@ import json
 import logging
 import re
 
+import io
+
 import httpx
 
-from .. import llm_client
+from .. import image_proxy, llm_client
+from . import matching
 from ..llm_client import LlmError
 from ..mcp_client import McpClient, McpError
 
@@ -373,21 +376,28 @@ LAYERS = {"headwear", "accessory", "inner", "mid", "outer", "top", "bottom", "dr
 _REVIEW_PROMPT = (
     "You check an automatic clothing detector against the photo. DETECTIONS below are "
     "what it found, numbered; box is [x1, y1, x2, y2], normalized, origin top-left.\n"
+    "We only shop for what the main person in the photo is WEARING or HOLDING. Things "
+    "hanging on a rack or hook, lying around, worn by someone else, or seen in a mirror "
+    "are background, not part of the outfit.\n"
     "Reply with ONLY this JSON, no prose:\n"
     '{"keep": [ids that are correct as described],\n'
     ' "correct": [{"id": id, "description": "..."}],\n'
+    ' "drop": [ids that are not worn or held by the person],\n'
     ' "missing": [{"slot": "snake_case_item_type", "layer": "...", "description": "..."}]}\n'
     "Rules:\n"
-    "- Every id goes in keep or correct. Correct an id when its item type is wrong (a "
-    "skirt detected as shorts) or its description misses what a shopper would search "
-    "for.\n"
+    "- Every id goes in exactly one of keep, correct or drop. Correct an id when its item "
+    "type is wrong (a skirt detected as shorts) or its description misses what a shopper "
+    "would search for. Drop an id that is background (a hat on a rack, a coat on a "
+    "hanger) or not clothing.\n"
     "- A description is an English shopping query for that one item: colour, pattern "
     "(for stripes: direction and width, e.g. thin vertical stripes), material if clearly "
     "visible, and the specific style name (duffle coat with toggle buttons, high-top "
     "sneakers, leather mini skirt). 4-14 words. No brands, no prices.\n"
-    "- missing: wearable items clearly visible in the photo that no detection covers "
-    "(a layer under a jacket, socks, a cap, a belt, a bag). Only what you can clearly "
-    "see; do not guess hidden items; do not repeat a detected item. At most "
+    "- missing: clothing, shoes, bags or accessories the person is clearly wearing or "
+    "holding that no detection covers (a layer under a jacket, socks, a cap, a belt, a "
+    "bag in hand). Not cameras, phones or other gadgets, not background items. Only what "
+    "you can clearly see; do not guess hidden items; do not repeat a detected item. "
+    "At most "
     f"{MAX_MISSING}. layer is one of: " + ", ".join(sorted(LAYERS)) + ".\n"
     "- If everything is right and nothing is missing, keep all ids and leave the other "
     "lists empty.\n\nDETECTIONS:\n"
@@ -415,6 +425,7 @@ def _parse_review(content: str, ids: set[int]) -> dict:
         return " ".join(str(x or "").split())[:200]
 
     keep = {i for i in data.get("keep") or [] if isinstance(i, int) and i in ids}
+    drop = {i for i in data.get("drop") or [] if isinstance(i, int) and i in ids} - keep
     correct = {}
     for c in data.get("correct") or []:
         if isinstance(c, dict) and isinstance(c.get("id"), int) and c["id"] in ids:
@@ -429,7 +440,8 @@ def _parse_review(content: str, ids: set[int]) -> dict:
             layer = str(m.get("layer", "")).lower()
             missing.append({"slot": name, "layer": layer if layer in LAYERS else None,
                             "description": d})
-    return {"keep": keep, "correct": correct, "missing": missing[:MAX_MISSING]}
+    drop -= set(correct)
+    return {"keep": keep, "correct": correct, "drop": drop, "missing": missing[:MAX_MISSING]}
 
 
 def _same_item(a: str, b: str) -> bool:
@@ -447,7 +459,8 @@ async def review_outfit(image_url: str, slots: list[dict],
     the results in. Missing items become optional slots with no candidates, which
     find_candidates text-searches like any other. Any failure returns `slots`
     unchanged and the plan goes on as before. report["_review"] records
-    {"corrected": [...], "added": [...], "unconfirmed": [...]} or {"error": ...}.
+    {"corrected", "added", "removed" (background items dropped), "unconfirmed"} or
+    {"error": ...}.
     """
     report = report if report is not None else {}
     detections = _review_detections(slots)
@@ -467,11 +480,14 @@ async def review_outfit(image_url: str, slots: list[dict],
         log.warning("review_outfit failed, using the detections as they are: %s", e)
         return slots
 
-    out, corrected, added, unconfirmed = [], [], [], []
+    out, corrected, added, unconfirmed, removed = [], [], [], [], []
     template = slots[0]
     for s in slots:
         s = dict(s)
         ids = [d["id"] for d in s.get("detections") or []]
+        if ids and all(i in review["drop"] for i in ids):
+            removed.append({"slot": s["slot"], "was": s["query"]})  # background, not worn
+            continue
         fix = next((review["correct"][i] for i in ids if i in review["correct"]), None)
         if fix and fix.lower() != s["query"].lower():
             corrected.append({"slot": s["slot"], "from": s["query"], "to": fix})
@@ -489,7 +505,8 @@ async def review_outfit(image_url: str, slots: list[dict],
             slot["gender"] = template["gender"]
         out.append(slot)
         added.append({"slot": m["slot"], "layer": m["layer"], "query": m["description"]})
-    report["_review"] = {"corrected": corrected, "added": added, "unconfirmed": unconfirmed}
+    report["_review"] = {"corrected": corrected, "added": added, "removed": removed,
+                         "unconfirmed": unconfirmed}
     return out
 
 
@@ -571,12 +588,15 @@ _CATEGORY_PROMPT = (
 )
 _CATEGORY_NAME_CHARS = 90
 MAX_CONCURRENT_CHECKS = 4
+CATEGORY_CHECK_TOP_N = 10  # only these are checked — and kept; the rest rank too low
 
 
 async def check_categories(slots: list[dict], candidates: dict[str, list[dict]],
                            report: dict | None = None) -> dict[str, list[dict]]:
-    """Drop candidates that are the wrong product type: one DeepSeek call per slot,
-    at most MAX_CONCURRENT_CHECKS at once.
+    """Desk / renter: drop candidates that are the wrong product type — one DeepSeek
+    call per slot, at most MAX_CONCURRENT_CHECKS at once, over each slot's first
+    CATEGORY_CHECK_TOP_N candidates (the rest are cut). Outfits use the keyword rules
+    in matching.category_filter instead, with no LLM call.
 
     Returns new candidate lists; order is kept. A slot whose call fails, or whose reply
     does not parse, keeps its candidates (report[slot]["category_error"]). Rejections
@@ -587,7 +607,7 @@ async def check_categories(slots: list[dict], candidates: dict[str, list[dict]],
     gate = asyncio.Semaphore(MAX_CONCURRENT_CHECKS)
 
     async def one(slot: dict) -> set[int]:
-        items = candidates.get(slot["slot"]) or []
+        items = (candidates.get(slot["slot"]) or [])[:CATEGORY_CHECK_TOP_N]
         listing = {"slot": slot["slot"], "looking_for": slot.get("query") or slot["slot"],
                    "candidates": [{"id": i, "name": (p.get("product_name") or "")[:_CATEGORY_NAME_CHARS]}
                                   for i, p in enumerate(items)]}
@@ -608,9 +628,9 @@ async def check_categories(slots: list[dict], candidates: dict[str, list[dict]],
             report.setdefault(name, {})["category_error"] = f"{type(res).__name__}: {res}"
             log.warning("check_categories: %s kept as is: %s", name, res)
             continue
+        items = candidates[name][:CATEGORY_CHECK_TOP_N]
+        out[name] = [p for i, p in enumerate(items) if i not in res]
         if res:
-            items = candidates[name]
-            out[name] = [p for i, p in enumerate(items) if i not in res]
             report.setdefault(name, {})["category_rejected"] = [
                 items[i].get("product_name") for i in sorted(res)]
             total += len(res)
@@ -632,3 +652,102 @@ def _parse_rejections(content: str, n: int) -> set[int]:
     if not isinstance(ids, list):
         raise ValueError('the reply has no "reject" list')
     return {i for i in ids if isinstance(i, int) and not isinstance(i, bool) and 0 <= i < n}
+
+
+# ── outfit pipeline ──────────────────────────────────────────────────────
+
+async def _photo(image_url: str):
+    from PIL import Image
+    data, _ = await image_proxy.fetch(image_url)
+    return await asyncio.to_thread(lambda: Image.open(io.BytesIO(data)).convert("RGB"))
+
+
+async def outfit_candidates(image_url: str, slots: list[dict], budget: float,
+                            report: dict | None = None
+                            ) -> tuple[list[dict], dict[str, list[dict]], dict[str, list[dict]]]:
+    """Review, search, filter and score an outfit. Returns (slots, candidates, scores),
+    candidates per slot ordered best first and scores[slot][i] matching them.
+
+    While the review call runs (the slow part), everything that does not depend on it
+    runs too: a text search on each detection's own description, the photo download,
+    and the colour analysis of the image-search products. After the review:
+      corrected slot   text search on the sharper description, first; then image
+                       results; the early search is not used (its description was off)
+      kept slot        image results, then the early text search
+      added slot       text search on the review's description
+      dropped slot     removed (background, not worn)
+    Then the keyword category rules, then matching.score_slot (rank, colour, text).
+    """
+    report = report if report is not None else {}
+    gate = asyncio.Semaphore(MAX_CONCURRENT_SEARCHES)
+
+    async def text(query: str, gender) -> list[dict]:
+        async with gate:
+            res = await search_text(query, domain=["fashion"], max_price=budget,
+                                    gender=gender, top_k=TEXT_TOP_K)
+        return res.get("results") or []
+
+    async def safe(coro, slot_name: str, what: str):
+        try:
+            return await coro
+        except McpError as e:
+            report.setdefault(slot_name, {})["error"] = f"{e.code}: {e} ({what})"
+            return []
+
+    early = {s["slot"]: asyncio.create_task(safe(text(s["query"], s.get("gender")),
+                                                 s["slot"], "early text search"))
+             for s in slots}
+    photo_task = asyncio.create_task(_photo(image_url))
+    image_urls = [p.get("img_url") for s in slots
+                  for p in clean(s.get("candidates") or [])[:matching.COLOUR_TOP_N]]
+    palettes_task = asyncio.create_task(matching.product_palettes(image_urls, image_proxy.fetch))
+
+    reviewed = await review_outfit(image_url, slots, report=report)
+
+    async def gather_slot(s: dict) -> list[dict]:
+        image = s.get("candidates") or []
+        if s.get("refine_query"):
+            first = await safe(text(s["refine_query"], s.get("gender")), s["slot"],
+                               "corrected search")
+            merged = clean(first + image)
+            report.setdefault(s["slot"], {})["corrected_search"] = {
+                "query": s["refine_query"], "added": len(merged) - len(clean(image))}
+            return merged
+        if s["slot"] in early:
+            return clean(image + await early[s["slot"]])
+        return clean(await safe(text(s["query"], s.get("gender")), s["slot"], "added item"))
+
+    lists = await asyncio.gather(*(gather_slot(s) for s in reviewed))
+    for t in early.values():
+        t.cancel()  # corrected or dropped slots never used theirs
+
+    candidates = {}
+    for s, products in zip(reviewed, lists):
+        kept, rejected = matching.category_filter(s, products)
+        if rejected:
+            report.setdefault(s["slot"], {})["category_rejected"] = rejected
+        candidates[s["slot"]] = kept
+    report["_category_check"] = {"method": "rules",
+                                 "rejected": sum(len(v.get("category_rejected", []))
+                                                 for k, v in report.items()
+                                                 if not k.startswith("_") and isinstance(v, dict))}
+
+    try:
+        photo = await photo_task
+    except Exception as e:
+        photo = None
+        report["_colour"] = {"error": f"photo not loaded: {type(e).__name__}: {e}"}
+    await palettes_task
+    top_urls = [p.get("img_url") for v in candidates.values() for p in v[:matching.COLOUR_TOP_N]]
+    palettes = await matching.product_palettes(top_urls, image_proxy.fetch)
+
+    scores, ordered = {}, {}
+    for s in reviewed:
+        pal = await asyncio.to_thread(matching.item_palette, photo, s)
+        scored = matching.score_slot(s, candidates[s["slot"]], pal, palettes)
+        ordered[s["slot"]] = [p for p, _ in scored]
+        scores[s["slot"]] = [m for _, m in scored]
+    report.setdefault("_colour", {}).update(
+        product_images=len(set(top_urls)),
+        analysed=len({u for u in top_urls if palettes.get(u)}))
+    return reviewed, ordered, scores

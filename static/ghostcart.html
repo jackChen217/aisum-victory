@@ -60,6 +60,14 @@
                    -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
   .product .price { font-weight: 700; }
   .product.changed { border: 2px solid var(--accent); }
+  .item { display: grid; gap: 6px; align-content: start; }
+  .alts { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--soft); }
+  .alts button { padding: 0; border: 1px solid var(--border); border-radius: 6px;
+                 background: #fff; width: 44px; height: 44px; overflow: hidden; cursor: pointer; }
+  .alts button:hover { border-color: var(--accent); }
+  .alts img { width: 100%; height: 100%; object-fit: contain; }
+  .pinned { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--accent); }
+  .pinned button { font-size: 12px; padding: 0 6px; }
   .badge { position: absolute; top: 8px; left: 8px; font-size: 12px; font-weight: 700;
            color: #fff; background: var(--accent); border-radius: 999px; padding: 2px 8px; }
   .badge.added { background: var(--ok); }
@@ -231,6 +239,8 @@ const REASONS = { over_budget: 'over budget', owned: 'you own it', no_candidates
 
 let session = null;   // { id, budget, plan, scenario, image }
 let replanSeq = 0;    // drop replies to slider moves that were overtaken
+// session.pins {slot: p_key}: products the user chose from the alternatives; the
+// optimizer must keep them and fits the rest around them.
 
 function setStatus(text, state = '') { $('status').textContent = text; $('status').dataset.state = state; }
 const money = (n) => `$${Number(n).toFixed(2)}`;
@@ -282,7 +292,35 @@ function render(data, changes = null, previous = {}) {
 
   const grid = $('grid'); grid.replaceChildren();
   for (const [slot, p] of Object.entries(data.plan)) {
-    grid.append(card(slot, p, changes?.[slot], previous[slot]));
+    const item = document.createElement('div'); item.className = 'item';
+    item.append(card(slot, p, changes?.[slot], previous[slot]));
+    if (session.pins?.[slot]) {
+      const pin = document.createElement('div'); pin.className = 'pinned';
+      const un = document.createElement('button'); un.type = 'button'; un.textContent = 'Unpin';
+      un.addEventListener('click', () => {
+        const pins = { ...session.pins }; delete pins[slot];
+        replanWith(session.budget, pins, `Unpinned ${label(slot)}.`);
+      });
+      pin.append('📌 Your pick', un);
+      item.append(pin);
+    }
+    const alts = data.alternatives?.[slot] || [];
+    if (alts.length) {
+      const row = document.createElement('div'); row.className = 'alts';
+      row.append('Or:');
+      for (const { product: q } of alts) {
+        const b = document.createElement('button'); b.type = 'button';
+        b.title = `${q.product_name} · ${money(q.product_price)} — use this one`;
+        const im = document.createElement('img'); im.alt = q.product_name || ''; im.loading = 'lazy';
+        if (q.img_url) im.src = q.img_url;
+        b.append(im);
+        b.addEventListener('click', () => replanWith(session.budget,
+          { ...(session.pins || {}), [slot]: q.p_key }, `Swapped in ${label(slot)}: ${(q.product_name || '').slice(0, 40)}`));
+        row.append(b);
+      }
+      item.append(row);
+    }
+    grid.append(item);
   }
   const ul = $('left-out'); ul.replaceChildren();
   for (const [slot, c] of Object.entries(changes || {})) {
@@ -320,7 +358,7 @@ $('plan-form').addEventListener('submit', async (e) => {
   const t0 = performance.now();
   try {
     const data = await api('/api/plan', body);
-    session = { id: data.session_id, budget, plan: data.plan, scenario: data.scenario,
+    session = { id: data.session_id, budget, plan: data.plan, scenario: data.scenario, pins: {},
                 image: body.image_url,
                 layers: Object.fromEntries(data.slots.map((s) => [s.slot, s.layer])) };
     renderAgentLine(data.report?._review);
@@ -335,23 +373,27 @@ $('plan-form').addEventListener('submit', async (e) => {
 });
 
 $('slider').addEventListener('input', (e) => { $('slider-val').textContent = money(e.target.value); });
-$('slider').addEventListener('change', async (e) => {
+// One re-plan for the slider, a swap from the alternatives, or an unpin.
+async function replanWith(budget, pins, doneText = null) {
   if (!session) return;
-  const budget = Number(e.target.value);
   const seq = ++replanSeq;
   setStatus(`Re-optimizing for ${money(budget)}…`);
   try {
-    const data = await api('/api/replan', { session_id: session.id, budget });
+    const data = await api('/api/replan', { session_id: session.id, budget, pin: pins });
     if (seq !== replanSeq) return;
     const previous = session.plan;
-    session = { ...session, budget, plan: data.plan };
+    session = { ...session, budget, plan: data.plan, pins: data.pins || {} };
     render(data, data.changes, previous);
     const n = Object.values(data.changes).filter((c) => c !== 'unchanged').length;
-    setStatus(n ? `${n} item${n > 1 ? 's' : ''} changed.` : 'Nothing changed at this budget.');
+    const bad = (data.infeasible || []).filter((i) => pins[i.slot]).map((i) => label(i.slot));
+    setStatus(bad.length ? `Your pick for ${bad.join(', ')} does not fit this budget.`
+      : doneText || (n ? `${n} item${n > 1 ? 's' : ''} changed.` : 'Nothing changed at this budget.'),
+      bad.length ? 'error' : '');
   } catch (err) {
     if (seq === replanSeq) setStatus(err.message, 'error');
   }
-});
+}
+$('slider').addEventListener('change', (e) => replanWith(Number(e.target.value), session?.pins || {}));
 
 for (const b of document.querySelectorAll('[data-example]')) {
   b.addEventListener('click', () => {
@@ -419,8 +461,9 @@ function showGender() { $('gender-wrap').hidden = $('scenario').value === 'desk'
 // What the outfit review changed: the items it added and the descriptions it fixed.
 function renderAgentLine(review) {
   const box = $('agent-line'); box.replaceChildren();
-  const added = review?.added || [], fixed = review?.corrected || [];
-  box.hidden = !(added.length || fixed.length);
+  const added = review?.added || [], fixed = review?.corrected || [],
+        removed = review?.removed || [];
+  box.hidden = !(added.length || fixed.length || removed.length);
   if (box.hidden) return;
   const head = document.createElement('strong');
   head.textContent = `The agent added ${added.length} item${added.length === 1 ? '' : 's'} `
@@ -429,6 +472,11 @@ function renderAgentLine(review) {
   for (const a of added) {
     const li = document.createElement('li');
     li.textContent = `Added ${label(a.slot)}: ${a.query}`;
+    ul.append(li);
+  }
+  for (const r of removed) {
+    const li = document.createElement('li');
+    li.textContent = `Left out ${label(r.slot)} ("${r.was}"): not worn in the photo`;
     ul.append(li);
   }
   for (const c of fixed) {

@@ -228,31 +228,68 @@ def test_proxy_refuses_non_public_urls(url):
         asyncio.run(main.image_proxy.fetch(url))
 
 
-def test_auto_outfit_runs_review_once(client, fakes, monkeypatch):
+def test_auto_outfit_uses_the_outfit_pipeline(client, fakes, monkeypatch):
     async def outfit_slots(image_url, scenario, notes="", budget=None, gender=None):
         fakes["gender"] = gender
         return [dict(s, source="image_search", image_url=image_url) for s in SLOTS]
 
-    reviewed = []
+    ran = []
 
-    async def review(image_url, slots, report=None):
-        reviewed.append(image_url)
-        report["_review"] = {"corrected": [], "added": [{"slot": "socks"}], "unconfirmed": []}
-        return slots
+    async def pipeline(image_url, slots, budget, report=None):
+        ran.append((image_url, budget))
+        report["_review"] = {"corrected": [], "added": [{"slot": "socks"}], "removed": []}
+        scores = {k: [{"rank": 1, "colour": None, "text": None, "quality": 1 / (1 + i)}
+                      for i in range(len(v))] for k, v in CANDS.items()}
+        return slots, CANDS, scores
+
+    async def no_llm_check(*a, **kw):
+        raise AssertionError("outfits use keyword rules, not the LLM category check")
 
     monkeypatch.setattr(orchestrator.planner, "plan_slots", outfit_slots)
-    monkeypatch.setattr(orchestrator.planner, "review_outfit", review)
+    monkeypatch.setattr(orchestrator.planner, "outfit_candidates", pipeline)
+    monkeypatch.setattr(orchestrator.planner, "check_categories", no_llm_check)
     d = client.post("/api/plan", json={"image_url": "https://x/o.jpg", "budget": 150,
                                        "gender": "F"}).json()   # scenario defaults to auto
-    assert d["scenario"] == "outfit" and reviewed == ["https://x/o.jpg"]
+    assert d["scenario"] == "outfit" and ran == [("https://x/o.jpg", 150)]
     assert fakes["gender"] == "F"
     assert d["report"]["_review"]["added"] == [{"slot": "socks"}]
 
 
 def test_desk_does_not_run_review(client, monkeypatch):
     async def boom(*a, **kw):
-        raise AssertionError("review must not run for desk")
+        raise AssertionError("the outfit pipeline must not run for desk")
 
-    monkeypatch.setattr(orchestrator.planner, "review_outfit", boom)
+    monkeypatch.setattr(orchestrator.planner, "outfit_candidates", boom)
     assert client.post("/api/plan", json={"image_url": "https://x", "scenario": "desk",
                                           "budget": 350}).status_code == 200
+
+
+
+# ── alternatives and pins ────────────────────────────────────────────────
+
+def test_alternatives_and_pin(client):
+    d = client.post("/api/plan", json={"image_url": "https://x", "scenario": "desk",
+                                       "budget": 350}).json()
+    assert [a["product"]["p_key"] for a in d["alternatives"]["monitor"]] == ["M2"]
+    assert set(d["match"]["monitor"]) == {"rank", "colour", "text", "quality"}
+
+    # Pin the cheaper monitor: the optimizer must take it and spend the rest elsewhere.
+    r = client.post("/api/replan", json={"session_id": d["session_id"], "budget": 350,
+                                         "pin": {"monitor": "M2"}}).json()
+    assert r["plan"]["monitor"]["p_key"] == "M2" and r["pins"] == {"monitor": "M2"}
+    assert r["changes"]["monitor"] == "replaced"
+    # Pins stick across later re-plans until cleared.
+    r = client.post("/api/replan", json={"session_id": d["session_id"], "budget": 400}).json()
+    assert r["plan"]["monitor"]["p_key"] == "M2"
+    r = client.post("/api/replan", json={"session_id": d["session_id"], "budget": 400,
+                                         "pin": {}}).json()
+    assert r["plan"]["monitor"]["p_key"] == "M1" and r["pins"] == {}
+
+
+def test_pin_over_budget_is_infeasible_and_unknown_pin_is_ignored(client):
+    d = client.post("/api/plan", json={"image_url": "https://x", "scenario": "desk",
+                                       "budget": 350}).json()
+    r = client.post("/api/replan", json={"session_id": d["session_id"], "budget": 200,
+                                         "pin": {"monitor": "M1", "mouse": "nope"}}).json()
+    assert [i["slot"] for i in r["infeasible"]] == ["monitor"]
+    assert r["ignored_pins"] == {"mouse": "nope"}

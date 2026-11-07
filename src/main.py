@@ -329,12 +329,15 @@ class ReplanRequest(BaseModel):
     session_id: str
     budget: float = Field(gt=0, le=100_000)
     owned: list[str] | None = None
+    # {slot: p_key} that must be in the plan. Omit to keep the session's pins, {} to clear.
+    pin: dict[str, str] | None = None
 
 
 @app.post("/api/replan")
 async def replan(req: ReplanRequest, uid: str = Depends(require_user)):
     try:
-        return await orchestrator.replan(uid, req.session_id, req.budget, req.owned)
+        return await orchestrator.replan(uid, req.session_id, req.budget, req.owned,
+                                         req.pin)
     except SessionNotFound:
         return JSONResponse({"error": "This plan has expired. Generate a new one."},
                             status_code=404)
