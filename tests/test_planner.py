@@ -225,3 +225,51 @@ def test_refine_failure_keeps_candidates(monkeypatch, refine_env):
     out = asyncio.run(planner.find_candidates([outfit_slot("shoe", 2, 0.3)], 150, report))
     assert [x["p_key"] for x in out["shoe"]] == ["shoe0", "shoe1"]
     assert report["shoe"]["refine_error"] == "LlmError: gateway down"
+
+
+# ── check_categories ─────────────────────────────────────────────────────
+
+CAT_SLOTS = [{"slot": "desk", "query": "black gaming desk"},
+             {"slot": "speaker", "query": "desktop speaker"},
+             {"slot": "mouse", "query": "gaming mouse"}]
+
+
+def cat_cands():
+    return {"desk": [p("d1", "L-Shaped Gaming Desk"), p("d2", "Gaming Mouse Pad XL"),
+                     p("d3", "Standing Desk 55 inch")],
+            "speaker": [p("s1", "Computer Speakers Pair"), p("s2", "2Pcs Internal Speaker Replacement")],
+            "mouse": []}
+
+
+def test_check_categories_one_call_drops_rejected(monkeypatch):
+    prompts = []
+
+    async def chat(messages, tools=None):
+        prompts.append(messages[0]["content"])
+        return {"message": {"content": '```json\n{"desk": [1], "speaker": [1, 9, "x"]}\n```'}}
+
+    monkeypatch.setattr(planner.llm_client, "chat", chat)
+    report = {}
+    out = asyncio.run(planner.check_categories(CAT_SLOTS, cat_cands(), report))
+    assert len(prompts) == 1  # all slots in one call
+    assert "Gaming Mouse Pad XL" in prompts[0] and '"mouse"' not in prompts[0]  # empty slot skipped
+    assert [x["p_key"] for x in out["desk"]] == ["d1", "d3"]
+    assert [x["p_key"] for x in out["speaker"]] == ["s1"]  # out-of-range / non-int ids ignored
+    assert out["mouse"] == []
+    assert report["desk"]["category_rejected"] == ["Gaming Mouse Pad XL"]
+    assert report["_category_check"] == {"rejected": 2}
+
+
+@pytest.mark.parametrize("failure", ["not json at all", planner.LlmError("down")])
+def test_check_categories_failure_keeps_everything(monkeypatch, failure):
+    async def chat(messages, tools=None):
+        if isinstance(failure, Exception):
+            raise failure
+        return {"message": {"content": failure}}
+
+    monkeypatch.setattr(planner.llm_client, "chat", chat)
+    report = {}
+    cands = cat_cands()
+    out = asyncio.run(planner.check_categories(CAT_SLOTS, cands, report))
+    assert out == cands
+    assert "error" in report["_category_check"]

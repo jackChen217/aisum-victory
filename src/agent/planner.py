@@ -399,3 +399,80 @@ async def find_candidates(slots: list[dict], budget: float,
             res = []
         out[slot["slot"]] = res
     return out
+
+
+# ── category check ───────────────────────────────────────────────────────
+
+_CATEGORY_PROMPT = (
+    "You check shopping search results. For each slot below, decide which candidates "
+    "are NOT the kind of product the slot asks for, judging only from the product name. "
+    "Reject a candidate only when its name clearly shows a different product type: a "
+    "mouse pad in a 'desk' slot, replacement speaker parts in a 'speaker' slot, a phone "
+    "case in a 'monitor' slot. Do not reject for colour, style, price or brand, and keep "
+    "anything you are unsure about.\n"
+    'Reply with ONLY a JSON object mapping slot to the list of rejected ids, e.g. '
+    '{"desk": [3, 7], "speaker": []}. Include every slot.\n\nSLOTS:\n'
+)
+_CATEGORY_NAME_CHARS = 90
+
+
+async def check_categories(slots: list[dict], candidates: dict[str, list[dict]],
+                           report: dict | None = None) -> dict[str, list[dict]]:
+    """One DeepSeek call for all slots: drop candidates that are the wrong product type.
+
+    Returns new candidate lists; order is kept. Any failure — the call, or a reply that
+    does not parse — returns `candidates` unchanged and notes it in
+    report["_category_check"]. Rejections are listed per slot in
+    report[slot]["category_rejected"] (product names).
+    """
+    report = report if report is not None else {}
+    listing = {}
+    for s in slots:
+        items = candidates.get(s["slot"]) or []
+        if items:
+            listing[s["slot"]] = {
+                "looking_for": s.get("query") or s["slot"],
+                "candidates": [{"id": i, "name": (p.get("product_name") or "")[:_CATEGORY_NAME_CHARS]}
+                               for i, p in enumerate(items)]}
+    if not listing:
+        return candidates
+    try:
+        reply = await llm_client.chat([{"role": "user", "content":
+                                        _CATEGORY_PROMPT + json.dumps(listing, ensure_ascii=False)}])
+        rejected = _parse_rejections(reply["message"].get("content") or "", listing)
+    except (LlmError, httpx.HTTPError, ValueError) as e:
+        report["_category_check"] = {"error": f"{type(e).__name__}: {e}"}
+        log.warning("check_categories failed, keeping all candidates: %s", e)
+        return candidates
+
+    out = dict(candidates)
+    for slot, ids in rejected.items():
+        if not ids:
+            continue
+        items = candidates[slot]
+        out[slot] = [p for i, p in enumerate(items) if i not in ids]
+        report.setdefault(slot, {})["category_rejected"] = [
+            items[i].get("product_name") for i in sorted(ids)]
+    report["_category_check"] = {"rejected": sum(len(v) for v in rejected.values())}
+    return out
+
+
+def _parse_rejections(content: str, listing: dict) -> dict[str, set[int]]:
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip())
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("no JSON object in the reply")
+    try:
+        data = json.loads(text[start:end + 1])
+    except json.JSONDecodeError as e:
+        raise ValueError(f"invalid JSON ({e})") from None
+    if not isinstance(data, dict):
+        raise ValueError("the JSON is not an object")
+    out = {}
+    for slot, ids in data.items():
+        if slot not in listing or not isinstance(ids, list):
+            continue  # unknown slot or odd value: ignore, keep that slot as is
+        n = len(listing[slot]["candidates"])
+        out[slot] = {i for i in ids if isinstance(i, int) and not isinstance(i, bool)
+                     and 0 <= i < n}
+    return out

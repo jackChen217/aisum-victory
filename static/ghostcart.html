@@ -237,7 +237,7 @@ $('plan-form').addEventListener('submit', async (e) => {
   const budget = Number($('budget').value);
   const body = { image_url: $('image-url').value.trim(), scenario: $('scenario').value, budget };
   $('go').disabled = true;
-  setStatus('Reading the photo and searching products… this takes 10–30 seconds.');
+  setStatus('Reading the photo, searching and checking products… this takes up to a minute.');
   const t0 = performance.now();
   try {
     const data = await api('/api/plan', body);

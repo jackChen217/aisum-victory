@@ -21,7 +21,7 @@ CANDS = {"monitor": [p("M1", 300), p("M2", 150)], "mouse": [p("m1", 50), p("m2",
 
 @pytest.fixture
 def fakes(monkeypatch):
-    calls = {"plan_slots": [], "find": [], "llm": []}
+    calls = {"plan_slots": [], "find": [], "llm": [], "categories": 0}
 
     async def plan_slots(image_url, scenario, notes="", budget=None):
         calls["plan_slots"].append((image_url, scenario, notes, budget))
@@ -32,12 +32,17 @@ def fakes(monkeypatch):
         report["mouse"] = {"ignored_filters": ["domain"]}
         return CANDS
 
+    async def check_categories(slots, candidates, report=None):
+        calls["categories"] += 1
+        return candidates
+
     async def chat(messages, tools=None):
         calls["llm"].append(messages[0]["content"])
         return {"message": {"content": "Here is why."}, "finish_reason": "stop"}
 
     monkeypatch.setattr(orchestrator.planner, "plan_slots", plan_slots)
     monkeypatch.setattr(orchestrator.planner, "find_candidates", find_candidates)
+    monkeypatch.setattr(orchestrator.planner, "check_categories", check_categories)
     monkeypatch.setattr(orchestrator.llm_client, "chat", chat)
     orchestrator.SESSIONS.clear()
     return calls
@@ -71,7 +76,7 @@ def test_plan_then_replan(client, fakes):
     assert {s: x["p_key"] for s, x in re["plan"].items()} == {"monitor": "M2", "mouse": "m1"}
     assert re["changes"] == {"monitor": "replaced", "mouse": "unchanged"}
     assert "note" not in re
-    assert fakes["find"] == [350]  # no new search
+    assert fakes["find"] == [350] and fakes["categories"] == 1  # no new search or check
     assert len(fakes["llm"]) == 2 and '"new_budget": 200' in fakes["llm"][1]
 
     # The next diff is against the re-planned version, not the first one.
@@ -129,7 +134,8 @@ def test_explanation_failure_keeps_plan(client, monkeypatch):
     r = client.post("/api/plan", json={"image_url": "https://x", "scenario": "desk",
                                        "budget": 350})
     assert r.status_code == 200
-    assert r.json()["plan"] and "No explanation available" in r.json()["explanation"]
+    assert r.json()["plan"]
+    assert r.json()["explanation"] == "2 items picked for $350.00 of your $350 budget."
 
 
 def test_old_sessions_are_evicted(fakes):
@@ -137,3 +143,38 @@ def test_old_sessions_are_evicted(fakes):
     for _ in range(orchestrator.MAX_SESSIONS_PER_USER + 3):
         asyncio.run(orchestrator.plan("u", "https://x", "desk", 350))
     assert sum(1 for k in orchestrator.SESSIONS if k[0] == "u") == orchestrator.MAX_SESSIONS_PER_USER
+
+
+# ── stricter explanations ────────────────────────────────────────────────
+
+def test_invented_attributes():
+    data = '{"picked": {"shoe": {"name": "Women Suede Slip-On Loafers"}}}'
+    assert orchestrator.invented_attributes("The suede loafers fit.", data) == set()
+    assert orchestrator.invented_attributes("The beige suede flats.", data) == {"beige"}
+
+
+def test_explanation_with_invented_colour_is_retried(client, monkeypatch):
+    replies = iter(["You get beige flats.", "You get the shoes for the budget."])
+    seen = []
+
+    async def chat(messages, tools=None):
+        seen.append(messages)
+        return {"message": {"role": "assistant", "content": next(replies)},
+                "finish_reason": "stop"}
+
+    monkeypatch.setattr(orchestrator.llm_client, "chat", chat)
+    r = client.post("/api/plan", json={"image_url": "https://x", "scenario": "desk",
+                                       "budget": 350}).json()
+    assert r["explanation"] == "You get the shoes for the budget."
+    assert "beige" in seen[1][-1]["content"]
+
+
+def test_explanation_still_inventing_falls_back(client, monkeypatch):
+    async def chat(messages, tools=None):
+        return {"message": {"role": "assistant", "content": "A sleek black leather monitor."},
+                "finish_reason": "stop"}
+
+    monkeypatch.setattr(orchestrator.llm_client, "chat", chat)
+    r = client.post("/api/plan", json={"image_url": "https://x", "scenario": "desk",
+                                       "budget": 350}).json()
+    assert r["explanation"] == "2 items picked for $350.00 of your $350 budget."

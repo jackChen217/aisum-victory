@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import uuid
 
@@ -34,10 +35,28 @@ _PUBLIC_SLOT_KEYS = ("slot", "required", "weight", "query", "domain")
 
 _EXPLAIN_RULES = (
     "Rules: 2-4 short sentences, plain English, no lists, no markdown. Use only facts "
-    "in the data: product names, prices, slots, budget. Never invent materials, sizes, "
-    "compatibility or stock; if the data does not say, do not claim it. Mention any "
-    "required slot that could not be filled and why."
+    "in the data: product names, prices, slots, budget. When you describe a product, "
+    "use only words that appear in its name in the data, or just the slot name "
+    "(\"the shoes\"). NEVER add a colour, material, pattern, size, fit or style that is "
+    "not written in that product's name - a slot or photo is not evidence. Never claim "
+    "compatibility or stock. Mention any required slot that could not be filled and why."
 )
+
+# Descriptive words the model likes to add. If one shows up in an explanation but
+# nowhere in the data it was given, the explanation made it up.
+_ATTRIBUTE_WORDS = {
+    # colours
+    "black", "white", "grey", "gray", "beige", "cream", "ivory", "brown", "tan", "camel",
+    "navy", "blue", "red", "pink", "purple", "violet", "green", "olive", "khaki",
+    "yellow", "orange", "gold", "golden", "silver", "rgb", "neon", "pastel",
+    # materials
+    "leather", "suede", "wool", "woolen", "cashmere", "cotton", "linen", "silk",
+    "satin", "denim", "velvet", "corduroy", "fleece", "knit", "knitted", "mesh",
+    "nylon", "polyester", "canvas", "metal", "aluminum", "aluminium", "steel", "wood",
+    "wooden", "bamboo", "glass", "plastic", "acrylic", "rubber", "faux", "fur",
+    # patterns
+    "striped", "stripes", "plaid", "checked", "houndstooth", "floral", "polka",
+}
 
 
 class SessionNotFound(KeyError):
@@ -52,8 +71,10 @@ async def plan(uid: str, image_url: str, scenario: str, budget: float,
     slots = await planner.plan_slots(image_url, scenario, notes, budget=budget)
     report: dict = {}
     candidates = await planner.find_candidates(slots, budget, report=report)
+    candidates = await planner.check_categories(slots, candidates, report=report)
     result = optimize(slots, candidates, budget, owned)
-    explanation = await _explain(_plan_prompt(scenario, notes, budget, result))
+    explanation = await _explain(_plan_prompt(scenario, notes, budget, result),
+                                 _fallback(result, budget))
 
     session_id = uuid.uuid4().hex
     _save(uid, session_id, {
@@ -81,7 +102,8 @@ async def replan(uid: str, session_id: str, budget: float,
     owned = list(owned if owned is not None else s["owned"])
     result = optimize(s["slots"], s["candidates"], budget, owned)
     changes = diff_plans(s["plan"], result["plan"])
-    explanation = await _explain(_replan_prompt(s, budget, owned, result, changes))
+    explanation = await _explain(_replan_prompt(s, budget, owned, result, changes),
+                                 _fallback(result, budget, changes))
 
     s.update(budget=budget, owned=owned, plan=result["plan"], touched=time.time())
     out = {
@@ -147,13 +169,50 @@ def _replan_prompt(s: dict, budget: float, owned: list[str], result: dict,
             + _EXPLAIN_RULES + "\n\nDATA:\n" + json.dumps(data, ensure_ascii=False))
 
 
-async def _explain(prompt: str) -> str:
-    """One DeepSeek call. A failure must not lose the plan: fall back to plain text."""
-    try:
-        reply = await llm_client.chat([{"role": "user", "content": prompt}])
+def _words(text: str) -> set[str]:
+    return set(re.findall(r"[a-z]+", text.lower()))
+
+
+def invented_attributes(explanation: str, data_text: str) -> set[str]:
+    """Colour / material / pattern words in the explanation that the data never says."""
+    return (_words(explanation) & _ATTRIBUTE_WORDS) - _words(data_text)
+
+
+def _fallback(result: dict, budget: float, changes: dict | None = None) -> str:
+    """Plain, always-true text for when the model's explanation is missing or unusable."""
+    n = len(result["plan"])
+    text = (f"{n} item{'s' if n != 1 else ''} picked for ${result['total']:.2f} of your "
+            f"${budget:g} budget.")
+    if changes is not None:
+        changed = [s.replace("_", " ") for s, c in changes.items() if c != "unchanged"]
+        text += (f" Changed: {', '.join(changed)}." if changed else " Nothing changed.")
+    if result["infeasible"]:
+        text += " Not filled: " + ", ".join(i["slot"].replace("_", " ")
+                                            for i in result["infeasible"]) + "."
+    return text
+
+
+async def _explain(prompt: str, fallback: str) -> str:
+    """One DeepSeek call, checked. An explanation that adds a colour, material or
+    pattern the data does not contain gets one retry naming the words; if it still does,
+    or the call fails, the plain `fallback` is used. A failure must not lose the plan."""
+    data_text = prompt.split("DATA:", 1)[-1]
+    messages = [{"role": "user", "content": prompt}]
+    for _attempt in range(2):
+        try:
+            reply = await llm_client.chat(messages)
+        except (LlmError, httpx.HTTPError) as e:
+            log.warning("explanation failed: %s", e)
+            return fallback
         text = (reply["message"].get("content") or "").strip()
-        if text:
+        if not text:
+            return fallback
+        bad = invented_attributes(text, data_text)
+        if not bad:
             return text
-    except (LlmError, httpx.HTTPError) as e:
-        log.warning("explanation failed: %s", e)
-    return "The plan below is the best fit for your budget. (No explanation available.)"
+        log.warning("explanation added %s, which no product name says", sorted(bad))
+        messages += [reply["message"], {"role": "user", "content":
+                     f"These words are not in any product name in the data: "
+                     f"{', '.join(sorted(bad))}. Rewrite without them, using only words "
+                     f"from the product names or the slot names."}]
+    return fallback
