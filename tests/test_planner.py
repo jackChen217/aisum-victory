@@ -450,7 +450,7 @@ def test_outfit_candidates_runs_review_alongside_searches(monkeypatch):
     monkeypatch.setattr(planner.matching, "product_palettes", no_palettes)
     report = {}
     slots, cands, scores = asyncio.run(planner.outfit_candidates(
-        "https://x/o.jpg", outfit_slots(), 150, report))
+        "https://x/o.jpg", outfit_slots(), 150, report, enhanced=True))
 
     # Early searches start before the review answers; the corrected one after it.
     assert order.index("text:black shoe") < order.index("review-end")

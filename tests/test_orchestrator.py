@@ -21,6 +21,8 @@ CANDS = {"monitor": [p("M1", 300), p("M2", 150)], "mouse": [p("m1", 50), p("m2",
 
 @pytest.fixture
 def fakes(monkeypatch):
+    # Existing tests also cover the optional legacy explanation path.
+    monkeypatch.setattr(orchestrator, "GENERATE_EXPLANATIONS", True)
     calls = {"plan_slots": [], "find": [], "llm": [], "categories": 0}
 
     async def plan_slots(image_url, scenario, notes="", budget=None, gender=None):

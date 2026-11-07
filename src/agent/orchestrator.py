@@ -30,6 +30,9 @@ log = logging.getLogger(__name__)
 
 SESSIONS: dict[tuple[str, str], dict] = {}
 MAX_SESSIONS_PER_USER = 20
+# Optional legacy explanations remain available for controlled comparisons.
+# The recovery baseline returns a factual summary without another model call.
+GENERATE_EXPLANATIONS = False
 
 _PUBLIC_SLOT_KEYS = ("slot", "required", "weight", "query", "domain", "layer", "source",
                      "detected_as")
@@ -75,14 +78,17 @@ async def plan(uid: str, image_url: str, scenario: str, budget: float,
     """`scenario` "auto" lets image search decide (outfit if it detects clothing, else
     desk). `gender` is the user's own choice (F / M), used for outfit only.
 
-    LLM calls: outfit = review + explanation (category check by keyword rules, colour
-    and text matching without an LLM); desk = slot planning + one category check per
-    slot (first 10 candidates) + explanation."""
+    Default outfit path: native image search + deterministic budget optimization.
+    Desk still uses slot planning and one model category check per populated slot.
+    Extra model explanations are disabled unless GENERATE_EXPLANATIONS is enabled.
+    """
     owned = list(owned or [])
+    started = time.perf_counter()
     gender = gender if scenario in ("auto", "outfit") else None
     slots = await planner.plan_slots(image_url, scenario, notes, budget=budget,
                                      gender=gender)
     scenario = planner.scenario_of(slots) if scenario == "auto" else scenario
+    detected = time.perf_counter()
     report: dict = {}
     if scenario == "outfit":
         slots, candidates, scores = await planner.outfit_candidates(
@@ -91,10 +97,14 @@ async def plan(uid: str, image_url: str, scenario: str, budget: float,
         candidates = await planner.find_candidates(slots, budget, report=report)
         candidates = await planner.check_categories(slots, candidates, report=report)
         candidates, scores = _text_ranked(slots, candidates)
+    searched = time.perf_counter()
     quality = {k: [m["quality"] for m in v] for k, v in scores.items()}
     result = optimize(slots, candidates, budget, owned, quality)
-    explanation = await _explain(_plan_prompt(scenario, notes, budget, result),
-                                 _fallback(result, budget))
+    optimized = time.perf_counter()
+    explanation = _fallback(result, budget)
+    if GENERATE_EXPLANATIONS:
+        explanation = await _explain(_plan_prompt(scenario, notes, budget, result), explanation)
+    explained = time.perf_counter()
 
     session_id = uuid.uuid4().hex
     _save(uid, session_id, {
@@ -114,6 +124,13 @@ async def plan(uid: str, image_url: str, scenario: str, budget: float,
         "total": result["total"],
         "explanation": explanation,
         "report": report,
+        "timings_ms": {
+            "detect": round((detected - started) * 1000, 2),
+            "candidates": round((searched - detected) * 1000, 2),
+            "optimize": round((optimized - searched) * 1000, 2),
+            "explanation": round((explained - optimized) * 1000, 2),
+            "total": round((explained - started) * 1000, 2),
+        },
     }
 
 
@@ -123,6 +140,7 @@ async def replan(uid: str, session_id: str, budget: float,
     """Re-optimize the saved candidates. `pins` {slot: p_key} must be in the plan:
     that slot is filled with that product and the rest of the budget goes to the
     others. Pins are kept for later re-plans; pass {} to clear them, None to keep."""
+    started = time.perf_counter()
     s = SESSIONS.get((uid, session_id))
     if s is None:
         raise SessionNotFound(session_id)
@@ -136,8 +154,9 @@ async def replan(uid: str, session_id: str, budget: float,
     slots, candidates, quality = _apply_pins(s["slots"], s["candidates"], s["scores"], pins)
     result = optimize(slots, candidates, budget, owned, quality)
     changes = diff_plans(s["plan"], result["plan"])
-    explanation = await _explain(_replan_prompt(s, budget, owned, result, changes),
-                                 _fallback(result, budget, changes))
+    explanation = _fallback(result, budget, changes)
+    if GENERATE_EXPLANATIONS:
+        explanation = await _explain(_replan_prompt(s, budget, owned, result, changes), explanation)
 
     s.update(budget=budget, owned=owned, pins=pins, plan=result["plan"],
              touched=time.time())
@@ -152,6 +171,7 @@ async def replan(uid: str, session_id: str, budget: float,
         "total": result["total"],
         "changes": changes,
         "explanation": explanation,
+        "timings_ms": {"total": round((time.perf_counter() - started) * 1000, 2)},
     }
     if unknown:
         out["ignored_pins"] = unknown

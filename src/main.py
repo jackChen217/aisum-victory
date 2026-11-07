@@ -24,6 +24,7 @@ GhostCart (src/agent/, page at /ghostcart):
   /api/lookboard-image  a session's photo or planned product image, proxied so the
                        page can export the Lookboard canvas as PNG
 """
+import asyncio
 import json
 import time
 from contextlib import asynccontextmanager
@@ -36,7 +37,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import image_proxy, llm_client, uploads
-from .agent import orchestrator, planner
+from .agent import comparison, orchestrator, planner
 from .agent.orchestrator import SessionNotFound
 from .agent.planner import PlanError
 from .auth import require_user
@@ -77,6 +78,11 @@ async def index():
 @app.get("/ghostcart")
 async def ghostcart():
     return FileResponse(STATIC / "ghostcart.html")
+
+
+@app.get("/ghostcart/batch")
+async def ghostcart_batch():
+    return FileResponse(STATIC / "ghostcart-batch.html")
 
 
 @app.get("/api/firebase-config")
@@ -325,6 +331,32 @@ async def plan(req: PlanRequest, uid: str = Depends(require_user)):
         return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
 
 
+class ComparisonRequest(BaseModel):
+    image_url: str
+    budget: float = Field(gt=0, le=100_000)
+    mode: Literal["raw", "budget", "enhanced"]
+    comparison_id: str | None = None
+    gender: Literal["F", "M"] | None = None
+
+
+@app.post("/api/compare/outfit")
+async def compare_outfit(req: ComparisonRequest, uid: str = Depends(require_user)):
+    try:
+        async with asyncio.timeout(comparison.ENHANCED_TIMEOUT_SECONDS):
+            return await comparison.stage(uid, req.image_url, req.budget, req.mode,
+                                          req.comparison_id, req.gender)
+    except comparison.ComparisonNotFound:
+        return JSONResponse({"error": "Comparison expired. Run this image again."}, status_code=404)
+    except TimeoutError:
+        return JSONResponse({"error": "This stage exceeded 120 seconds; earlier comparison results are kept."}, status_code=504)
+    except PlanError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except McpError as e:
+        return _mcp_error(e)
+    except (LlmError, httpx.HTTPError) as e:
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
+
+
 class ReplanRequest(BaseModel):
     session_id: str
     budget: float = Field(gt=0, le=100_000)
@@ -373,6 +405,21 @@ async def upload(request: Request, uid: str = Depends(require_user)):
 
 
 # ── Lookboard image proxy ────────────────────────────────────────────────
+
+@app.get("/api/comparison-image")
+async def comparison_image(comparison_id: str, variant: Literal["raw", "budget", "enhanced"],
+                           slot: str, uid: str = Depends(require_user)):
+    try:
+        url = comparison.image_url_for(uid, comparison_id, variant, slot)
+    except comparison.ComparisonNotFound:
+        return JSONResponse({"error": "Comparison expired. Run this image again."}, status_code=404)
+    except KeyError:
+        return JSONResponse({"error": "No product image for this comparison slot."}, status_code=404)
+    try:
+        data, kind = await image_proxy.fetch(url)
+    except (image_proxy.ImageFetchError, httpx.HTTPError) as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    return Response(data, media_type=kind, headers={"Cache-Control": "private, max-age=600"})
 
 @app.get("/api/lookboard-image")
 async def lookboard_image(session_id: str, slot: str, uid: str = Depends(require_user)):

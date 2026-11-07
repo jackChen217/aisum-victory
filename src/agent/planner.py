@@ -9,8 +9,8 @@ search returned for that item), "source", "image_url", "item" and "boxes", so
 find_candidates can skip searching again and re-check weak slots against the photo.
 
 desk / renter: one DeepSeek call with the image decides the slots.
-outfit:        no LLM to plan. search_products_by_image splits the photo into items;
-               DeepSeek is called only to rescue a slot whose candidates look weak.
+outfit:        image search splits the photo into items. The default baseline keeps
+               native candidate order with no extra model calls or image downloads.
 """
 from __future__ import annotations
 
@@ -340,7 +340,7 @@ def _norm(name: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9]+", " ", name.lower()).split())
 
 
-def clean(products: list[dict]) -> list[dict]:
+def clean(products: list[dict], *, near_duplicates: bool = True) -> list[dict]:
     """Keep order; drop repeated p_keys and names nearly identical to one already kept
     (the first, i.e. best-ranked, wins). Mojibake names are repaired (the product is
     copied, never edited in place); one that cannot be repaired is dropped."""
@@ -356,7 +356,8 @@ def clean(products: list[dict]) -> list[dict]:
             p = {**p, "product_name": fixed}
             name = fixed
         n = _norm(name)
-        if any(difflib.SequenceMatcher(None, n, m).ratio() >= _NEAR_DUP for m in names):
+        if near_duplicates and any(
+                difflib.SequenceMatcher(None, n, m).ratio() >= _NEAR_DUP for m in names):
             continue
         keys.add(key)
         names.append(n)
@@ -663,9 +664,13 @@ async def _photo(image_url: str):
 
 
 async def outfit_candidates(image_url: str, slots: list[dict], budget: float,
-                            report: dict | None = None
+                            report: dict | None = None, *, enhanced: bool = False
                             ) -> tuple[list[dict], dict[str, list[dict]], dict[str, list[dict]]]:
-    """Review, search, filter and score an outfit. Returns (slots, candidates, scores),
+    """Return (slots, candidates, scores), preserving AIRS order by default.
+
+    enhanced=True enables the previous experimental pipeline described below.
+
+    Review, search, filter and score an outfit. Returns (slots, candidates, scores),
     candidates per slot ordered best first and scores[slot][i] matching them.
 
     While the review call runs (the slow part), everything that does not depend on it
@@ -679,6 +684,23 @@ async def outfit_candidates(image_url: str, slots: list[dict], budget: float,
     Then the keyword category rules, then matching.score_slot (rank, colour, text).
     """
     report = report if report is not None else {}
+    if not enhanced:
+        # Baseline: preserve AIRS candidate order. Near-identical titles can be
+        # different colour/pattern variants, so deduplicate only actual product IDs.
+        # No second search, review call, or product-image download on this path.
+        candidates, scores = {}, {}
+        for slot in slots:
+            products = clean(slot.get("candidates") or [], near_duplicates=False)
+            candidates[slot["slot"]] = products
+            scores[slot["slot"]] = [
+                {"rank": 1 / (1 + i), "colour": None, "text": None,
+                 "quality": 1 / (1 + i)} for i in range(len(products))
+            ]
+            if slot.get("ignored_filters"):
+                report.setdefault(slot["slot"], {})["ignored_filters"] = slot["ignored_filters"]
+        report["_matching"] = {"method": "image_rank", "enhanced": False}
+        return slots, candidates, scores
+
     gate = asyncio.Semaphore(MAX_CONCURRENT_SEARCHES)
 
     async def text(query: str, gender) -> list[dict]:
@@ -702,52 +724,61 @@ async def outfit_candidates(image_url: str, slots: list[dict], budget: float,
                   for p in clean(s.get("candidates") or [])[:matching.COLOUR_TOP_N]]
     palettes_task = asyncio.create_task(matching.product_palettes(image_urls, image_proxy.fetch))
 
-    reviewed = await review_outfit(image_url, slots, report=report)
-
-    async def gather_slot(s: dict) -> list[dict]:
-        image = s.get("candidates") or []
-        if s.get("refine_query"):
-            first = await safe(text(s["refine_query"], s.get("gender")), s["slot"],
-                               "corrected search")
-            merged = clean(first + image)
-            report.setdefault(s["slot"], {})["corrected_search"] = {
-                "query": s["refine_query"], "added": len(merged) - len(clean(image))}
-            return merged
-        if s["slot"] in early:
-            return clean(image + await early[s["slot"]])
-        return clean(await safe(text(s["query"], s.get("gender")), s["slot"], "added item"))
-
-    lists = await asyncio.gather(*(gather_slot(s) for s in reviewed))
-    for t in early.values():
-        t.cancel()  # corrected or dropped slots never used theirs
-
-    candidates = {}
-    for s, products in zip(reviewed, lists):
-        kept, rejected = matching.category_filter(s, products)
-        if rejected:
-            report.setdefault(s["slot"], {})["category_rejected"] = rejected
-        candidates[s["slot"]] = kept
-    report["_category_check"] = {"method": "rules",
-                                 "rejected": sum(len(v.get("category_rejected", []))
-                                                 for k, v in report.items()
-                                                 if not k.startswith("_") and isinstance(v, dict))}
-
+    pending = [*early.values(), photo_task, palettes_task]
     try:
-        photo = await photo_task
-    except Exception as e:
-        photo = None
-        report["_colour"] = {"error": f"photo not loaded: {type(e).__name__}: {e}"}
-    await palettes_task
-    top_urls = [p.get("img_url") for v in candidates.values() for p in v[:matching.COLOUR_TOP_N]]
-    palettes = await matching.product_palettes(top_urls, image_proxy.fetch)
+        reviewed = await review_outfit(image_url, slots, report=report)
 
-    scores, ordered = {}, {}
-    for s in reviewed:
-        pal = await asyncio.to_thread(matching.item_palette, photo, s)
-        scored = matching.score_slot(s, candidates[s["slot"]], pal, palettes)
-        ordered[s["slot"]] = [p for p, _ in scored]
-        scores[s["slot"]] = [m for _, m in scored]
-    report.setdefault("_colour", {}).update(
-        product_images=len(set(top_urls)),
-        analysed=len({u for u in top_urls if palettes.get(u)}))
-    return reviewed, ordered, scores
+        async def gather_slot(s: dict) -> list[dict]:
+            image = s.get("candidates") or []
+            if s.get("refine_query"):
+                first = await safe(text(s["refine_query"], s.get("gender")), s["slot"],
+                                   "corrected search")
+                merged = clean(first + image)
+                report.setdefault(s["slot"], {})["corrected_search"] = {
+                    "query": s["refine_query"], "added": len(merged) - len(clean(image))}
+                return merged
+            if s["slot"] in early:
+                return clean(image + await early[s["slot"]])
+            return clean(await safe(text(s["query"], s.get("gender")), s["slot"], "added item"))
+
+        lists = await asyncio.gather(*(gather_slot(s) for s in reviewed))
+        for t in early.values():
+            t.cancel()  # corrected or dropped slots never used theirs
+
+        candidates = {}
+        for s, products in zip(reviewed, lists):
+            kept, rejected = matching.category_filter(s, products)
+            if rejected:
+                report.setdefault(s["slot"], {})["category_rejected"] = rejected
+            candidates[s["slot"]] = kept
+        report["_category_check"] = {"method": "rules",
+                                     "rejected": sum(len(v.get("category_rejected", []))
+                                                     for k, v in report.items()
+                                                     if not k.startswith("_") and isinstance(v, dict))}
+
+        try:
+            photo = await photo_task
+        except Exception as e:
+            photo = None
+            report["_colour"] = {"error": f"photo not loaded: {type(e).__name__}: {e}"}
+        await palettes_task
+        top_urls = [p.get("img_url") for v in candidates.values() for p in v[:matching.COLOUR_TOP_N]]
+        palettes = await matching.product_palettes(top_urls, image_proxy.fetch)
+
+        scores, ordered = {}, {}
+        for s in reviewed:
+            pal = await asyncio.to_thread(matching.item_palette, photo, s)
+            scored = matching.score_slot(s, candidates[s["slot"]], pal, palettes)
+            ordered[s["slot"]] = [p for p, _ in scored]
+            scores[s["slot"]] = [m for _, m in scored]
+        report.setdefault("_colour", {}).update(
+            product_images=len(set(top_urls)),
+            analysed=len({u for u in top_urls if palettes.get(u)}))
+        return reviewed, ordered, scores
+    finally:
+        # A cancelled/timed-out experiment must not leave searches or downloads
+        # running behind later batch images. Also consume unused task exceptions.
+        for task in pending:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)

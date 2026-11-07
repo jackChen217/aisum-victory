@@ -11,3 +11,14 @@ __pycache__/
 
 # Throwaway experiments
 scratch/
+
+# Test photos (may show real people) and batch exports. Images belong only under static/.
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.heic
+!static/**/*.png
+!static/**/*.jpg
+ghostcart-batch-*.json
+eval_*.json
