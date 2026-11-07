@@ -38,6 +38,28 @@ def test_normal_case_finds_best_combination():
     assert r["dropped"] == [] and r["infeasible"] == []
 
 
+def test_quality_falls_off_as_one_over_rank():
+    slots = [{"slot": "kb", "required": True, "weight": 6}]
+    # Quality 1, 1/2, 1/3, 1/4 — not the linear 1, 3/4, 1/2, 1/4.
+    for budget, (key, objective) in {100: ("k1", 6), 60: ("k2", 3), 40: ("k3", 2),
+                                     20: ("k4", 1.5)}.items():
+        cands = {"kb": [p("k1", 100), p("k2", 60), p("k3", 40), p("k4", 20)]}
+        r = optimize(slots, cands, budget)
+        assert keys(r["plan"]) == {"kb": key}
+        assert r["objective"] == pytest.approx(objective)
+
+
+def test_top_pick_is_not_traded_for_a_small_saving():
+    # Linear quality over 10 candidates made 2nd place cost only 0.1 * weight, so a
+    # cheaper keyboard plus a filler item won. With 1/(1+rank) the top keyboard wins.
+    slots = [{"slot": "kb", "required": True, "weight": 5},
+             {"slot": "pad", "required": False, "weight": 1}]
+    cands = {"kb": [p("k1", 100)] + [p(f"k{i}", 70) for i in range(2, 11)],
+             "pad": [p(f"m{i}", 30) for i in range(1, 11)]}
+    r = optimize(slots, cands, budget=100)
+    assert keys(r["plan"]) == {"kb": "k1"}
+
+
 def test_plan_returns_products_unchanged():
     r = optimize(SLOTS, CANDIDATES, budget=450)
     assert r["plan"]["monitor"] is CANDIDATES["monitor"][0]
@@ -117,7 +139,7 @@ def _brute_force(slots, cands, budget):
         cost = sum(c[1]["product_price"] for c in combo if c)
         if cost > budget + 1e-9:
             continue
-        value = sum(s["weight"] * (1 - c[0] / len(cands[s["slot"]]))
+        value = sum(s["weight"] / (1 + c[0])
                     for s, c in zip(slots, combo) if c)
         best = value if best is None else max(best, value)
     return best

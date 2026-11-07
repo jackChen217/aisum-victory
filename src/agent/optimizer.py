@@ -5,7 +5,8 @@ Pure functions: no network, no LLM, no state. Products are AISUM product dicts
 
 Why quality comes from rank and not from `score`: scene-match scores cluster in
 0.97–1.0, so they do not separate candidates. The order the search returned them
-in does, so quality = 1 - rank/len (rank 0 = first = 1.0).
+in does, so quality = 1/(1+rank): 1, 1/2, 1/3, ... The steep drop makes leaving the top
+result cost real objective, so the optimizer does not trade it away for a few dollars.
 
     optimize(slots, candidates, budget, owned) -> {plan, dropped, total, infeasible, objective}
     diff_plans(old_plan, new_plan)             -> {slot: added | removed | replaced | unchanged}
@@ -46,16 +47,15 @@ def _usable(products: list[dict]) -> list[tuple[dict, int]]:
 
 
 def _options(products: list[tuple[dict, int]]) -> list[tuple[int, float, dict]]:
-    """(cents, quality, product) per candidate, quality = 1 - rank/len.
+    """(cents, quality, product) per candidate, quality = 1/(1+rank), rank 0 = first.
 
     Among candidates with the same price only the best-ranked one can ever be chosen,
     so the rest are dropped here to keep the DP small.
     """
-    n = len(products)
     best: dict[int, tuple[int, float, dict]] = {}
     for rank, (p, cents) in enumerate(products):
         if cents not in best:
-            best[cents] = (cents, 1 - rank / n, p)
+            best[cents] = (cents, 1 / (1 + rank), p)
     return list(best.values())
 
 
