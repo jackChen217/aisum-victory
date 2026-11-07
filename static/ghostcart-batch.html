@@ -16,8 +16,8 @@ label{display:grid;gap:5px;font-size:14px}input,select{font:inherit;padding:9px;
 .product small{display:block;color:var(--muted)}.name{font-size:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.meta{color:var(--muted);font-size:13px;margin:8px 0}
 .error{color:var(--err)}.queue{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0}.queue a{font-size:13px;color:var(--muted)}
 .history{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.version{font-size:13px;color:var(--muted)}details{margin-top:10px}summary{cursor:pointer}pre{white-space:pre-wrap;font-size:12px}
-.wrap{max-width:1780px}.triple{grid-template-columns:minmax(180px,.8fr) repeat(3,minmax(240px,1fr));overflow-x:auto}.triple .products{grid-template-columns:repeat(2,minmax(0,1fr))}.variant h3,.source-column h3{font-size:16px}.variant-total{font-weight:700}.variant{min-width:0}.triple .product img{height:130px}
-@media(max-width:900px){.triple{grid-template-columns:240px repeat(3,300px)}}
+.wrap{max-width:1780px}.triple{grid-template-columns:minmax(180px,.8fr) repeat(4,minmax(240px,1fr));overflow-x:auto}.triple .products{grid-template-columns:repeat(2,minmax(0,1fr))}.variant h3,.source-column h3{font-size:16px}.variant-total{font-weight:700}.variant{min-width:0}.triple .product img{height:130px}
+@media(max-width:900px){.triple{grid-template-columns:240px repeat(4,300px)}}
 @media(max-width:640px){.comparison{grid-template-columns:1fr}.products{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>
 </head>
@@ -27,11 +27,11 @@ label{display:grid;gap:5px;font-size:14px}input,select{font:inherit;padding:9px;
 <section id="gate" class="card gate"><button id="gate-signin" class="primary">Sign in with Google</button><p class="notice-consent">Built for AISUM Hackathon 2026. Signing in creates an account in a Google Cloud project AISUM operates. Your searches are sent to AISUM's services to produce results and are logged there against this app, not against your account. The team that built this app can see the email you sign in with. <a href="https://aisum-hackathon.web.app/privacy">Privacy notice</a></p><p id="gate-err" class="err" hidden></p></section>
 <main id="app"><p id="autherr" class="err" hidden></p>
 <section class="card"><div class="controls">
-<label>测试方式<select id="test-mode"><option value="triple">穿搭三组对照 A / B / C</option><option value="single">旧版单组（穿搭或桌面）</option></select></label>
+<label>测试方式<select id="test-mode"><option value="triple">穿搭四组对照 A / B / C / D</option><option value="single">旧版单组（穿搭或桌面）</option></select></label>
 <label>每张图的预算（美元，不是 10 张合计）<input id="budget" type="number" min="1" max="100000" value="150"></label>
 <label>图片类型<select id="scenario"><option value="outfit">穿搭（建议先测）</option><option value="auto">混合图片，自动判断</option><option value="desk">桌面（实验）</option></select></label>
 <label>C 组服饰筛选（单组时也生效）<select id="gender"><option value="">不限</option><option value="F">Women</option><option value="M">Men</option></select></label>
-</div><p class="meta">三组对照仅测试穿搭：A 不加条件；B 只传每件价格上限（不保证整套不超）；C 用审核补漏、文字补搜、颜色/BM25 重排，再约束整套预算。C 是此前的实验增强策略，可能更慢或更差，并会消耗模型额度。相同条件时 C 复用 B 的搜索结果；耗时含被复用的搜索。A/B 保留每个原始检测项，左右鞋可能重复；C 会合并。建议先选 1–2 张确认效果，再跑 10 张。</p><div id="drop"><button id="pick">选择 1–10 张图片</button><input id="files" type="file" accept="image/jpeg,image/png" multiple hidden><p class="meta">也可以一次拖入多张 JPG / PNG；每张最多 8 MB。按顺序处理，一张完成就显示一张。</p></div>
+</div><p class="meta">四组对照仅测试穿搭：A 不加条件，每个检测项取第 1 个；B 只传每件价格上限（不保证整套不超）；C 用审核补漏、文字补搜、颜色/BM25 重排，再约束整套预算（此前的实验策略，更慢、会消耗模型额度）；D 是 /ghostcart 的默认路径：左右鞋合并、保留 AISUM 排序，用背包算法约束整套预算，不调用模型。相同条件时 C、D 复用 B 的搜索结果；耗时含被复用的搜索。A/B 保留每个原始检测项，左右鞋可能重复；C、D 会合并。选了性别时 C、D 会另搜一次。建议先选 1–2 张确认效果，再跑 10 张。</p><div id="drop"><button id="pick">选择 1–10 张图片</button><input id="files" type="file" accept="image/jpeg,image/png" multiple hidden><p class="meta">也可以一次拖入多张 JPG / PNG；每张最多 8 MB。按顺序处理，一张完成就显示一张。</p></div>
 <div class="actions"><button id="start" class="primary" disabled>开始测试</button><button id="stop" disabled>完成当前图片后停止</button><button id="download-all" disabled>下载全部对比图（长图）</button><button id="export" disabled>下载结果 JSON</button></div>
 <p id="status" role="status" aria-live="polite">先选择图片。</p><div id="queue" class="queue"></div>
 <details><summary>本浏览器的测试记录</summary><p class="meta">按当前登录账号保存最近 5 批原图预览和商品结果，刷新后可以查看。清除浏览器数据会删除记录；商品图链接或导出会话可能过期，建议本批完成后下载对比图和 JSON 留存。</p><div id="history" class="history"></div><button id="clear-history">删除我的本地测试记录</button></details>

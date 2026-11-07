@@ -1,6 +1,9 @@
 const $ = (id) => document.getElementById(id);
-const BUILD = 'outfit-three-way-v2';
-const MODES = [['raw', 'A · AISUM 原始第一名'], ['budget', 'B · 只加价格上限第一名'], ['enhanced', 'C · 实验增强＋整套预算']];
+const BUILD = 'outfit-four-way-v3';
+const MODES = [['raw', 'A · AISUM 原始第一名'], ['budget', 'B · 只加价格上限第一名'], ['enhanced', 'C · 实验增强＋整套预算'], ['default', 'D · 默认路径：原生排序＋整套预算']];
+// D is cheap and C can time out, so D runs before C; panels still show A/B/C/D.
+const RUN_ORDER = ['raw', 'budget', 'default', 'enhanced'];
+const TITLE = Object.fromEntries(MODES);
 const hasResult = (e) => Boolean(e.data || Object.values(e.variants || {}).some((v) => v.plan));
 const price = (n) => n == null ? '价格未知' : money(n);
 const elapsed = (v) => ((v.timings_ms?.including_reused_search ?? v.timings_ms?.total ?? 0) / 1000).toFixed(1);
@@ -143,7 +146,7 @@ function renderEntry(entry, index) {
     for (const [mode, title] of MODES) {
       const panel = document.createElement('div'); panel.className = 'variant'; panel.append(text('h3', title));
       const v = entry.variants[mode];
-      panel.append(text('p', mode === 'raw' ? '不加价格或性别条件；每个检测项取第 1 个。' : mode === 'budget' ? `只加每件 ≤ ${money(run.settings.budget)}；整套可能超预算。` : '审核补漏、文字补搜、颜色/文字重排，再约束整套预算。', 'meta'));
+      panel.append(text('p', mode === 'raw' ? '不加价格或性别条件；每个检测项取第 1 个。' : mode === 'budget' ? `只加每件 ≤ ${money(run.settings.budget)}；整套可能超预算。` : mode === 'default' ? '/ghostcart 默认：左右鞋合并，保留 AISUM 排序，整套 ≤ 预算。' : '审核补漏、文字补搜、颜色/文字重排，再约束整套预算。', 'meta'));
       if (v?.plan) {
         panel.append(text('p', `${v.unknown_prices ? '已知价格合计 ' : '合计 '}${money(v.total)} · ${elapsed(v)} 秒`, 'variant-total'));
         if (v.unknown_prices) panel.append(text('p', `${v.unknown_prices} 件价格未知，不能判断完整总价。`, 'error'));
@@ -157,7 +160,7 @@ function renderEntry(entry, index) {
       comparison.append(panel);
     }
   } else if (entry.data) {
-    comparison.append(productGrid(entry.data.plan)); card.append(text('p', `旧版记录 · ${money(entry.data.total)} / ${money(run.settings.budget)} · ${entry.seconds.toFixed(1)} 秒。此记录没有 A/B/C 原始响应，不能补算成三组结果。`, 'meta'));
+    comparison.append(productGrid(entry.data.plan)); card.append(text('p', `旧版记录 · ${money(entry.data.total)} / ${money(run.settings.budget)} · ${entry.seconds.toFixed(1)} 秒。此记录没有原始响应，不能补算成对照结果。`, 'meta'));
     if (entry.data.infeasible?.length) card.append(text('p', `未配齐：${entry.data.infeasible.map((x) => label(x.slot)).join('、')}`, 'error'));
   } else comparison.append(text('p', entry.error || entry.message, entry.error ? 'error' : 'meta'));
   card.append(comparison); return card;
@@ -189,13 +192,14 @@ $('start').onclick = async () => {
       if (owner !== uid) break;
       entry.url = upload.url; entry.message = '识别并搜索商品中'; render(); status(`处理中：${i + 1}/${selected.length} · ${entry.name}`);
       if (entry.variants) {
-        for (const [mode, title] of MODES) {
+        for (const mode of RUN_ORDER) {
+          const title = TITLE[mode];
           if (owner !== uid) break;
           entry.message = `正在运行 ${title}`; render(); status(`${i + 1}/${selected.length} · ${entry.name} · ${title}`);
           try {
             const data = await request('/api/compare/outfit', { image_url: upload.url, budget,
               mode, comparison_id: entry.comparison_id || null,
-              gender: mode === 'enhanced' ? run.settings.gender : null }, 'application/json', uid);
+              gender: mode === 'enhanced' || mode === 'default' ? run.settings.gender : null }, 'application/json', uid);
             if (owner !== uid) break;
             entry.comparison_id = data.comparison_id; entry.variants[mode] = data;
           } catch (err) {
@@ -206,8 +210,8 @@ $('start').onclick = async () => {
         }
         if (owner !== uid) break;
         const succeeded = Object.values(entry.variants).filter((v) => v.plan).length;
-        entry.message = succeeded === 3 ? '三组已完成' : `部分完成（${succeeded}/3 组）`;
-        if (!succeeded) entry.error = '三组均失败；请查看各组错误。';
+        entry.message = succeeded === MODES.length ? '四组已完成' : `部分完成（${succeeded}/${MODES.length} 组）`;
+        if (!succeeded) entry.error = '各组均失败；请查看各组错误。';
       } else {
         const data = await request('/api/plan', { image_url: upload.url, scenario: run.settings.scenario,
           budget, gender: run.settings.gender }, 'application/json', uid);
@@ -283,6 +287,7 @@ async function variantBitmap(entry, mode, slot) {
     return r.ok ? await createImageBitmap(await r.blob()) : null;
   } catch { return null; } finally { clearTimeout(timer); }
 }
+const BOARD_W = 420 + 4 * 555; // source column + A/B/C/D
 function boardHeight(entry) {
   if (!entry.variants) return Math.max(800, 170 + Math.ceil(Object.keys(entry.data.plan).length / 3) * 210);
   const count = Math.max(0, ...MODES.map(([m]) => Object.keys(entry.variants[m]?.plan || {}).length));
@@ -290,9 +295,9 @@ function boardHeight(entry) {
 }
 async function board(entry, budget = run?.settings.budget) {
   if (!entry.variants) return legacyBoard(entry, budget);
-  const c = document.createElement('canvas'); c.width = 2100; c.height = boardHeight(entry);
+  const c = document.createElement('canvas'); c.width = BOARD_W; c.height = boardHeight(entry);
   const ctx = c.getContext('2d'); ctx.fillStyle = '#fafaf9'; ctx.fillRect(0, 0, c.width, c.height);
-  ctx.fillStyle = '#1c1917'; ctx.font = 'bold 28px sans-serif'; ctx.fillText(`GhostCart A/B/C · ${entry.name.slice(0, 70)} · Budget ${money(budget)}`, 25, 40);
+  ctx.fillStyle = '#1c1917'; ctx.font = 'bold 28px sans-serif'; ctx.fillText(`GhostCart A/B/C/D · ${entry.name.slice(0, 70)} · Budget ${money(budget)}`, 25, 40);
   const original = await bitmap(entry, '_photo');
   try { contain(ctx, original, 25, 105, 370, c.height - 180); } finally { original?.close(); }
   let unavailable = 0;
@@ -300,7 +305,7 @@ async function board(entry, budget = run?.settings.budget) {
     const [mode, title] = MODES[col], v = entry.variants[mode], x = 420 + col * 555;
     ctx.fillStyle = '#1c1917'; ctx.font = 'bold 23px sans-serif'; ctx.fillText(title, x, 85);
     ctx.font = '16px sans-serif';
-    ctx.fillText(mode === 'raw' ? 'No filters; top 1 per detection' : mode === 'budget' ? 'Per-item price cap; top 1 per detection' : 'Experimental review + reranking + total budget', x, 114);
+    ctx.fillText(mode === 'raw' ? 'No filters; top 1 per detection' : mode === 'budget' ? 'Per-item price cap; top 1 per detection' : mode === 'default' ? 'Default: AISUM order + total budget' : 'Experimental review + reranking + total budget', x, 114);
     if (!v?.plan) { ctx.fillStyle = '#b91c1c'; ctx.fillText((v?.error || 'Not completed').slice(0, 60), x, 160); continue; }
     ctx.fillText(`${money(v.total)}${v.unknown_prices ? ' + unknown prices' : ''} | ${elapsed(v)}s`, x, 145);
     ctx.fillStyle = '#b91c1c';
@@ -322,7 +327,7 @@ async function board(entry, budget = run?.settings.budget) {
       } finally { images.forEach((img) => img?.close()); }
     }
   }
-  ctx.fillStyle = '#57534e'; ctx.font = '16px sans-serif'; ctx.fillText('A/B keep all detections (including paired shoes). C merges paired items; its time includes the reused B search.', 25, c.height - 25);
+  ctx.fillStyle = '#57534e'; ctx.font = '16px sans-serif'; ctx.fillText('A/B keep all detections (including paired shoes). C/D merge paired items; their time includes the reused B search.', 25, c.height - 25);
   if (unavailable) status(`${entry.name}：${unavailable} 张商品图未加载；导出保留品类和价格。`);
   return c;
 }
@@ -331,7 +336,7 @@ $('download-all').onclick = async () => {
   exporting = true; controls();
   try {
     const entries = run.entries.filter(hasResult), budget = run.settings.budget, c = document.createElement('canvas'); c.width = entries.some((e) => e.variants) ? 1500 : 1000;
-    const heights = entries.map((e) => Math.round(boardHeight(e) * c.width / (e.variants ? 2100 : 1200)));
+    const heights = entries.map((e) => Math.round(boardHeight(e) * c.width / (e.variants ? BOARD_W : 1200)));
     c.height = heights.reduce((a, b) => a + b, 0); const ctx = c.getContext('2d'); let y = 0;
     for (let i = 0; i < entries.length; i++) {
       status(`正在导出对比图：${i + 1}/${entries.length}`);

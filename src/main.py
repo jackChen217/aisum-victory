@@ -334,7 +334,7 @@ async def plan(req: PlanRequest, uid: str = Depends(require_user)):
 class ComparisonRequest(BaseModel):
     image_url: str
     budget: float = Field(gt=0, le=100_000)
-    mode: Literal["raw", "budget", "enhanced"]
+    mode: Literal["raw", "budget", "enhanced", "default"]
     comparison_id: str | None = None
     gender: Literal["F", "M"] | None = None
 
@@ -407,7 +407,7 @@ async def upload(request: Request, uid: str = Depends(require_user)):
 # ── Lookboard image proxy ────────────────────────────────────────────────
 
 @app.get("/api/comparison-image")
-async def comparison_image(comparison_id: str, variant: Literal["raw", "budget", "enhanced"],
+async def comparison_image(comparison_id: str, variant: Literal["raw", "budget", "enhanced", "default"],
                            slot: str, uid: str = Depends(require_user)):
     try:
         url = comparison.image_url_for(uid, comparison_id, variant, slot)

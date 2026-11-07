@@ -2,28 +2,37 @@
 
 这个文件给 Claude Code 和队友看：比赛规则、API 限制、架构和分工。**不要在这里写任何 key。**
 
-## 三组对照测试（v2，11/7 本地改动）
+## 当前默认路径（11/7 晚，`main`）
 
-- `/ghostcart/batch` 默认 A/B/C 穿搭对照，最多 10 张，仍可切回旧单组测试桌面。单张正式页面的默认选品流程未切回增强版。
-- A：AISUM 图片搜索，不设价格/性别条件，逐个 detection 原样取 `products[0]`。B：只加 `max_price=budget`，同样逐个取第一名。二者均不合并左右鞋、不清洗、不执行整套预算算法；缺价格单列，合计可能超预算。不要把 B 的“每件价格上限”当成“整套预算”。
-- C：复用 B 的完整原始响应（用户选了 gender 则另搜一次），调用原 `outfit_candidates(enhanced=True)` 恢复审核、文字补搜、类别过滤、颜色/BM25 重排，再用背包算法限制整套预算。不增加解释模型调用；仅是实验，不保证比 A/B 好。
-- `/api/compare/outfit` 按 `mode=raw|budget|enhanced` 分阶段请求；每阶段立即保存/显示，因此 C 失败不会丢掉 A/B。阶段超时 120 秒；增强流程在取消时收回已派出的搜索/图片任务。C 的 `including_reused_search` 耗时包含 B 搜索，以免复用让 C 看起来虚假地快。
-- 响应/JSON 包含请求参数、完整 `raw_response`、检测框、选中商品的原图片搜索排名、补搜来源、警告和耗时。比较图片代理 `/api/comparison-image` 验证用户归属，只访问会话中已有商品 URL。对照会话与正式计划隔离，每账号最多保留 10 张。
-- 原图＋A/B/C 可单张/整批导出 PNG；历史 IndexedDB 名称保持不变，旧记录仍显示单组，不捏造缺失的原始响应。要得到旧图片的三组结果，需重新选择图片运行。历史预览/JSON 不是服务器端原图或图片代理会话的永久备份。
-- 用户提供的 `ghostcart-batch-8052b37c-8cb4-4e36-b4ca-5f6a38e7236b.json` 实际只有 8 条，均成功；已选商品的 rank 都为 1，合计 $32–80，预算 $150。因此这批的视觉差不能归因于整套预算 DP 降级选品。该 JSON 没有未筛选的完整响应，无法倒推出 A 组。
+`/ghostcart` 和 `POST /api/plan` 的穿搭流程：
+1. `search_products_by_image`（`max_price` = 预算，用户选了才传 `gender`）。
+2. item 和 item_detail 都相同的 detection（左右鞋）合并成一个 slot。
+3. 每个 slot 的候选就是 AISUM 返回的顺序：按 `p_key` 去重、修乱码，标题近似但 ID 不同的颜色/图案变体保留；quality = 1/(1+rank)。
+4. 背包算法（按美分精确 DP）保证整套 ≤ 预算；缺价格和 Renewed 由优化器排除。
+5. 解释用事实模板，不调 LLM（`GENERATE_EXPLANATIONS=True` 可恢复旧解释）。
 
-## 恢复匹配质量的默认路径（独立修复版本，待真实图片对照）
+所以默认穿搭流程**不调用任何模型**：没有整图审核、文字补搜、颜色/BM25 重排、下载候选图取色。旧的增强流程保留在 `outfit_candidates(..., enhanced=True)`，只用于对照。API 返回 `timings_ms`（识别、候选、优化、解释、总耗时）。预算、备选、固定商品和拼图接口不变。桌面路径没有简化，仍是看图拆清单 + 逐类 LLM 检查。
 
-- `/ghostcart/batch` 新增批量测试入口：同一预算逐张处理最多 10 张 JPG/PNG，每张失败不影响后面的图片，显示原图、商品、总价、阶段耗时；支持单张 PNG、整批对比长图和 JSON 导出。原 `/ghostcart` 页面有入口。
-- 批量页按登录账号将最近 5 批预览和商品结果保存到本浏览器 IndexedDB；不是云端持久化，清浏览器会删除。原后端内存会话过期会影响历史图片代理导出，因此本批完成后应下载图片/JSON。
+## 批量测试与四组对照（`/ghostcart/batch`）
 
-- 穿搭默认仅保留 AISUM 图片搜索的候选相对顺序，quality 用 rank；不再默认整图审核、文字补搜、颜色/BM25 重排或下载候选图取色。
-- 候选按商品 ID 去重并修复乱码；保留标题近似但 ID 不同的颜色/图案变体。缺价格和 Renewed 仍由优化器排除。
-- 旧增强流程保留在 `outfit_candidates(..., enhanced=True)`，用于对照，不是当前默认路径。
-- 首次方案与预算调整默认使用事实模板解释，不等待 LLM；`GENERATE_EXPLANATIONS=True` 可恢复旧解释流程用于对照。
-- API 增加 `timings_ms`，可查看识别、候选处理、优化、解释与总耗时。预算、备选、固定商品和拼图接口保持兼容。
-- 桌面路径尚未简化，仍包含看图拆清单及逐类 LLM 检查；内存会话的部署限制也尚未解决。
-- 下方旧进度记录中的审核、取色、BM25 和 LLM 解释描述属于此前实验版本。离线回归不代表真实图匹配或线上时延已经达标。
+- 同一预算逐张处理最多 10 张 JPG/PNG，一张失败不影响后面；默认四组对照，也可切回旧单组（调 `/api/plan`）。
+- `POST /api/compare/outfit`，`mode` 分阶段请求，每阶段立即保存并显示，后面的组失败不会丢掉前面的。页面运行顺序 A → B → D → C（C 最慢、可能超时），显示顺序 A/B/C/D。
+
+| 组 | `mode` | 图片搜索 | 选品 | 整套预算 | 左右鞋 | LLM |
+| --- | --- | --- | --- | --- | --- | --- |
+| A | `raw` | 不加任何条件 | 每个 detection 原样取 `products[0]` | 不限制，可能超 | 不合并 | 无 |
+| B | `budget` | 只加 `max_price=预算`（每件上限） | 每个 detection 原样取 `products[0]` | 不限制，可能超 | 不合并 | 无 |
+| C | `enhanced` | 复用 B 的响应 | 旧增强流程：审核补漏、文字补搜、类别规则、颜色/BM25 重排 | 背包 | 合并 | 审核 1 次 |
+| D | `default` | 复用 B 的响应 | **就是 `/ghostcart` 默认路径**：AISUM 原生排序 | 背包 | 合并 | 无 |
+
+- A/B 不清洗、不合并；缺价格单列为 `unknown_prices`，合计可能超预算。**不要把 B 的每件价格上限当成整套预算**，D 才是 B 加上整套预算。
+- C/D 默认复用 B 的完整原始响应；用户选了 gender 时另搜一次（A/B 永远不带 gender）。C/D 的 `timings_ms.including_reused_search` 包含被复用的 B 搜索耗时。D 的方案和同一图片搜索响应下 `/api/plan` 的方案一致（有测试，也用一张 Unsplash 图实测过）。
+- 阶段超时 120 秒；增强流程取消时收回已派出的搜索/下载任务。
+- 响应/JSON 含请求参数、完整 `raw_response`、检测框、选中商品在原图片搜索中的排名、补搜来源、警告和耗时。`/api/comparison-image` 验证用户归属，只代理会话中已有的商品 URL。对照会话和正式计划隔离，每账号最多 10 个，在内存里。
+- 原图＋A/B/C/D 可单张/整批导出 PNG、导出 JSON。最近 5 批按账号存在本浏览器 IndexedDB（不是云端，清浏览器就没了）；旧记录只显示单组，不补算缺失的原始响应。服务器会话过期后图片代理导出会失败，跑完应尽快下载。
+- **测试照片和批量导出 JSON 不进 git**（里面有真人）：`.gitignore` 忽略 `*.jpg/*.jpeg/*.png/*.webp/*.heic`（`static/` 除外）、`ghostcart-batch-*.json`、`eval_*.json` 和 `scratch/`。
+- 用户提供的 `ghostcart-batch-8052b37c-….json` 只有 8 条，均成功，已选商品 rank 都为 1，合计 $32–80（预算 $150），所以那批的视觉差不能归因于整套预算 DP 降级选品；里面没有未筛选的完整响应，推不出 A 组。
+- 离线回归不代表真实图匹配或线上时延已经达标；四组的视觉效果还要用真实图片对比。下方旧进度记录里的审核、取色、BM25 和 LLM 解释属于此前实验版本（现在的 C 组）。
 
 ## 比赛
 
@@ -101,7 +110,7 @@
 - `static/ghostcart.html`（`/ghostcart`）：测试页面，有场景选择（desk / outfit）、outfit 的性别选项（Any / Women / Men）、图片上传和链接、预算、三个示例按钮、商品卡片、总价和解释、预算滑块和换货标记（Swapped / Added / Removed）。
 - Lookboard（只在 outfit）：结果区上方，左边原图，右边按穿着位置排列（帽子/配饰 → 外套/上衣 → 裤子/裙子 → 鞋，包在旁边），下面是总价和预算；改预算会跟着更新。"Download image" 用 canvas 导出 1200×900 PNG，商品图通过 `GET /api/lookboard-image?session_id=&slot=` 代理（只能取自己会话里的图，只允许 https 公网地址、不跟随跳转）。
 - 图片上传：`POST /api/upload`（要登录），请求体是 JPG/PNG 原始字节（最大 8 MB，按文件头判断类型），存到 bucket `aisum-hackathon-juliet-uploads`（us-central1、uniform access、allUsers 可读、1 天自动删除）的 `uploads/<随机名>`，返回 `https://storage.googleapis.com/...` 公开链接；用 google-cloud-storage + ADC。页面上有上传按钮、拖拽和 ⌘V 粘贴，上传后自动填链接并显示预览。部署到 Cloud Run 时服务账号要有这个 bucket 的 objectCreator 权限，环境变量加 `UPLOAD_BUCKET`。
-- 测试：`.venv/bin/python -m pytest`，129 个用例，全部离线。
+- 测试：`.venv/bin/python -m pytest`，133 个用例，全部离线。
 
 实测（Python 直接调 orchestrator）：
 - 电竞桌面 $350：7–8 件，第一次出方案约 50 秒（类别检查那次 DeepSeek 调用约 35 秒）；预算改成 $250 后重新规划约 6 秒。

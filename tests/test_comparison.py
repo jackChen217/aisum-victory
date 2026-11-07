@@ -1,4 +1,5 @@
 """Exercise real comparison routes, enhancement and DP with only upstream I/O mocked."""
+import asyncio
 import copy
 import json
 
@@ -6,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src import main
-from src.agent import comparison, planner
+from src.agent import comparison, orchestrator, planner
 from src.auth import require_user
 
 
@@ -46,7 +47,10 @@ def test_three_stages_keep_native_top1_reuse_pool_and_optimize(client, monkeypat
             result["detections"].append({"item": "glasses", "products": [product("unknown", "Sunglasses", None)]})
         return result
 
+    llm_calls = []
+
     async def chat(*args, **kwargs):
+        llm_calls.append(1)
         return {"message": {"content": json.dumps({"keep": [0, 1, 2], "correct": [], "drop": [], "missing": []})}}
 
     async def text(*args, **kwargs):
@@ -75,6 +79,18 @@ def test_three_stages_keep_native_top1_reuse_pool_and_optimize(client, monkeypat
     budget = client.post("/api/compare/outfit", json={**request, "mode": "budget"}).json()
     assert budget["total"] == 100 and budget["over_budget"]
     assert not budget["total_budget_enforced"]
+    llm_calls_before_d = len(llm_calls)
+    default = client.post("/api/compare/outfit", json={**request, "mode": "default"}).json()
+    assert len(llm_calls) == llm_calls_before_d  # D makes no model calls
+    assert len(default["plan"]) == 2 and len(default["slots"]) == 2  # shoes merged
+    assert default["total"] <= 60 and not default["over_budget"] and not default["infeasible"]
+    assert default["total_budget_enforced"] and default["report"]["_matching"]["method"] == "image_rank"
+    assert default["report"]["_comparison"]["reused_budget_search"]
+    # D is the /ghostcart default outfit path on the same image-search response.
+    official = asyncio.run(orchestrator.plan("comparison-user", request["image_url"], "outfit", 60))
+    assert ({k: p["p_key"] for k, p in default["plan"].items()}
+            == {k: p["p_key"] for k, p in official["plan"].items()})
+    calls.pop()  # the orchestrator's own image search
     enhanced_response = client.post("/api/compare/outfit", json={**request, "mode": "enhanced"})
     assert enhanced_response.status_code == 200, enhanced_response.text
     enhanced = enhanced_response.json()
@@ -90,6 +106,7 @@ def test_three_stages_keep_native_top1_reuse_pool_and_optimize(client, monkeypat
     assert saved["variants"]["budget"]["raw_response"] == budget_response
     # Proxy only resolves products from the authenticated owner's saved comparison.
     assert comparison.image_url_for("comparison-user", raw["comparison_id"], "raw", "1_coat").endswith("premium.jpg")
+    assert set(saved["variants"]) == {"raw", "budget", "default", "enhanced"}
     main.app.dependency_overrides[require_user] = lambda: "another-user"
     assert client.get("/api/comparison-image", params={"comparison_id": raw["comparison_id"], "variant": "raw", "slot": "1_coat"}).status_code == 404
 
