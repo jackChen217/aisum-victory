@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GhostCart</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  /* style.css pulls this line up under index.html's progress strip; there is none here. */
+  .notice-line { margin: 0 0 20px; }
+  .form { display: grid; gap: 12px; }
+  .form label { display: grid; gap: 4px; font-size: 14px; color: var(--muted); }
+  .form .inline { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
+  .form .inline > label { flex: 1 1 140px; }
+  .form input, .form select, .form textarea {
+    font: inherit; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--surface); color: var(--text); width: 100%; box-sizing: border-box; }
+  .examples { font-size: 13px; color: var(--soft); }
+  .examples button { font-size: 13px; padding: 2px 8px; }
+  #status { min-height: 1.4em; font-size: 14px; color: var(--muted); margin: 8px 0 0; }
+  #status[data-state="error"] { color: var(--err); }
+
+  .summary { display: flex; justify-content: space-between; align-items: baseline;
+             flex-wrap: wrap; gap: 8px; }
+  .total { font-size: 28px; font-weight: 700; }
+  .total small { font-size: 15px; font-weight: 400; color: var(--muted); }
+  .explain { margin: 8px 0 0; line-height: 1.5; }
+  .slider { display: grid; gap: 4px; margin-top: 16px; font-size: 14px; color: var(--muted); }
+  .slider input { width: 100%; }
+  .note-warn { font-size: 14px; color: var(--err); background: var(--err-bg);
+               border-radius: 8px; padding: 8px 12px; margin: 12px 0 0; }
+
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+  .product { display: flex; flex-direction: column; text-decoration: none; color: inherit;
+             background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+             overflow: hidden; box-shadow: var(--shadow); position: relative; }
+  .product:hover { border-color: var(--muted); }
+  .product img { width: 100%; aspect-ratio: 1; object-fit: contain; background: #fff; }
+  .product .body { padding: 10px 12px 12px; display: grid; gap: 4px; }
+  .product .slot { font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+                   color: var(--soft); }
+  .product .name { font-size: 14px; line-height: 1.35; display: -webkit-box;
+                   -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .product .price { font-weight: 700; }
+  .product.changed { border: 2px solid var(--accent); }
+  .badge { position: absolute; top: 8px; left: 8px; font-size: 12px; font-weight: 700;
+           color: #fff; background: var(--accent); border-radius: 999px; padding: 2px 8px; }
+  .badge.added { background: var(--ok); }
+  .was { font-size: 12px; color: var(--soft); text-decoration: line-through; }
+  .left-out { font-size: 14px; color: var(--muted); margin: 12px 0 0; padding-left: 18px; }
+  .left-out .removed { color: var(--accent); }
+</style>
+</head>
+<body class="gated">
+<div class="wrap">
+
+  <header class="top">
+    <div>
+      <h1>GhostCart</h1>
+      <p class="lede">A photo and a budget in; the best set of products that fits, out.</p>
+    </div>
+    <div class="who">
+      <span id="whoami" hidden></span>
+      <button id="signout" hidden>Sign out</button>
+    </div>
+  </header>
+
+  <!-- Required notice, short form — on screen while signed in, where people type. -->
+  <p class="notice-line">Your searches are sent to AISUM's services and logged against this
+    app, not against your account. The team that built this app can see the email you sign in with.
+    <a href="https://aisum-hackathon.web.app/privacy">Privacy notice</a></p>
+
+  <section id="gate" class="card gate">
+    <button id="gate-signin" class="primary">Sign in with Google</button>
+    <!-- Required notice — do not remove without reading docs/setup.md, checkpoint 1.
+         Right under the sign-in button, so it is on screen when people sign in. -->
+    <p class="notice-consent">
+      Built for AISUM Hackathon 2026. Signing in creates an account in a Google Cloud
+      project AISUM operates. Your searches are sent to AISUM's services to produce
+      results and are logged there against this app, not against your account. The team that built this app can see the email you sign in with.
+      <a href="https://aisum-hackathon.web.app/privacy">Privacy notice</a>
+    </p>
+    <p id="gate-err" class="err" hidden></p>
+  </section>
+
+  <main id="app">
+    <p id="autherr" class="err" hidden></p>
+
+    <section class="card">
+      <form id="plan-form" class="form">
+        <div class="inline">
+          <label>Scenario
+            <select id="scenario">
+              <option value="desk">Desk setup</option>
+              <option value="outfit">Outfit</option>
+            </select>
+          </label>
+          <label>Budget (USD)
+            <input type="number" id="budget" min="1" step="1" value="350" required>
+          </label>
+        </div>
+        <label>Image URL (must open without signing in)
+          <input type="url" id="image-url" required placeholder="https://images.unsplash.com/...">
+        </label>
+        <p class="examples">Try:
+          <button type="button" data-example="desk">gaming desk</button>
+          <button type="button" data-example="outfit">striped top outfit</button>
+          <button type="button" data-example="winter">winter coat outfit</button>
+        </p>
+        <div><button id="go" class="primary" type="submit">Generate plan</button></div>
+      </form>
+      <p id="status"></p>
+    </section>
+
+    <section id="result" class="card" hidden>
+      <div class="summary">
+        <div class="total"><span id="total"></span> <small id="of-budget"></small></div>
+      </div>
+      <p class="explain" id="explanation"></p>
+      <label class="slider" id="slider-wrap">
+        <span>Change the budget: <strong id="slider-val"></strong> — the plan re-optimizes
+          over the same products, no new search.</span>
+        <input type="range" id="slider">
+      </label>
+      <p class="note-warn" id="note" hidden></p>
+    </section>
+
+    <section id="products" hidden>
+      <div class="grid" id="grid"></div>
+      <ul class="left-out" id="left-out"></ul>
+    </section>
+  </main>
+
+  <footer class="notice">
+    Built for AISUM Hackathon 2026. Signing in creates an account in a Google Cloud
+    project AISUM operates. Your searches are sent to AISUM's services to produce
+    results and are logged there against this app, not against your account. The team that built this app can see the email you sign in with.
+    <a href="https://aisum-hackathon.web.app/privacy">Privacy notice</a>
+  </footer>
+</div>
+
+<script type="module" src="/static/auth.js"></script>
+<script type="module">
+const $ = (id) => document.getElementById(id);
+
+const EXAMPLES = {
+  desk: { scenario: 'desk', budget: 350,
+    url: 'https://images.unsplash.com/photo-1696710257827-75e2e5954059?w=1080&q=85&fm=jpg' },
+  outfit: { scenario: 'outfit', budget: 150,
+    url: 'https://images.unsplash.com/photo-1758543144593-95061a3f418a?w=1080&q=85&fm=jpg' },
+  winter: { scenario: 'outfit', budget: 150,
+    url: 'https://images.unsplash.com/photo-1652473291442-7a2e034a00d1?w=1080&q=85&fm=jpg' },
+};
+const REASONS = { over_budget: 'over budget', owned: 'you own it', no_candidates: 'nothing found' };
+
+let session = null;   // { id, budget, plan }
+let replanSeq = 0;    // drop replies to slider moves that were overtaken
+
+function setStatus(text, state = '') { $('status').textContent = text; $('status').dataset.state = state; }
+const money = (n) => `$${Number(n).toFixed(2)}`;
+const label = (slot) => slot.replace(/_/g, ' ');
+
+async function api(path, body) {
+  const token = await window.__auth?.token();
+  if (!token) throw new Error('Sign in first.');
+  const r = await fetch(path, { method: 'POST', body: JSON.stringify(body),
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` } });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || data.detail?.[0]?.msg || data.detail || `HTTP ${r.status}`);
+  return data;
+}
+
+function card(slot, p, change, before) {
+  const a = document.createElement('a');
+  a.className = 'product' + (change === 'replaced' || change === 'added' ? ' changed' : '');
+  if (/^https?:\/\//.test(p.click_url || '')) { a.href = p.click_url; a.target = '_blank'; a.rel = 'noopener'; }
+  if (change === 'replaced' || change === 'added') {
+    const b = document.createElement('span');
+    b.className = 'badge' + (change === 'added' ? ' added' : '');
+    b.textContent = change === 'added' ? 'Added' : 'Swapped';
+    a.append(b);
+  }
+  const img = document.createElement('img');
+  img.loading = 'lazy'; img.alt = ''; if (p.img_url) img.src = p.img_url;
+  const body = document.createElement('div'); body.className = 'body';
+  const s = document.createElement('span'); s.className = 'slot'; s.textContent = label(slot);
+  const n = document.createElement('span'); n.className = 'name'; n.textContent = p.product_name || '';
+  const pr = document.createElement('span'); pr.className = 'price'; pr.textContent = money(p.product_price);
+  body.append(s, n, pr);
+  if (change === 'replaced' && before) {
+    const w = document.createElement('span'); w.className = 'was';
+    w.textContent = `was ${money(before.product_price)} · ${(before.product_name || '').slice(0, 50)}`;
+    body.append(w);
+  }
+  a.append(img, body);
+  return a;
+}
+
+function render(data, changes = null, previous = {}) {
+  $('result').hidden = false; $('products').hidden = false;
+  $('total').textContent = money(data.total);
+  $('of-budget').textContent = `of ${money(session.budget)} budget`;
+  $('explanation').textContent = data.explanation || '';
+  $('note').hidden = !data.note; $('note').textContent = data.note || '';
+
+  const grid = $('grid'); grid.replaceChildren();
+  for (const [slot, p] of Object.entries(data.plan)) {
+    grid.append(card(slot, p, changes?.[slot], previous[slot]));
+  }
+  const ul = $('left-out'); ul.replaceChildren();
+  for (const [slot, c] of Object.entries(changes || {})) {
+    if (c !== 'removed') continue;
+    const li = document.createElement('li'); li.className = 'removed';
+    li.textContent = `Removed: ${label(slot)} (${(previous[slot]?.product_name || '').slice(0, 60)})`;
+    ul.append(li);
+  }
+  const unfilled = new Set((data.infeasible || []).map((i) => i.slot));
+  for (const d of data.dropped || []) {
+    if (changes?.[d.slot] === 'removed') continue;
+    const li = document.createElement('li');
+    li.textContent = `${unfilled.has(d.slot) ? 'Needed but not filled' : 'Left out'}: `
+      + `${label(d.slot)} — ${REASONS[d.reason] || d.reason}`;
+    ul.append(li);
+  }
+}
+
+function setupSlider(budget) {
+  const s = $('slider');
+  s.min = Math.max(5, Math.round(budget * 0.3 / 5) * 5);
+  s.max = Math.round(budget * 1.5 / 5) * 5;
+  s.step = 5; s.value = budget;
+  $('slider-val').textContent = money(budget);
+}
+
+$('plan-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const budget = Number($('budget').value);
+  const body = { image_url: $('image-url').value.trim(), scenario: $('scenario').value, budget };
+  $('go').disabled = true;
+  setStatus('Reading the photo and searching products… this takes 10–30 seconds.');
+  const t0 = performance.now();
+  try {
+    const data = await api('/api/plan', body);
+    session = { id: data.session_id, budget, plan: data.plan };
+    setupSlider(budget);
+    render(data);
+    setStatus(`Done in ${((performance.now() - t0) / 1000).toFixed(1)}s · ${data.slots.length} items looked for.`);
+  } catch (err) {
+    setStatus(err.message, 'error');
+  } finally {
+    $('go').disabled = false;
+  }
+});
+
+$('slider').addEventListener('input', (e) => { $('slider-val').textContent = money(e.target.value); });
+$('slider').addEventListener('change', async (e) => {
+  if (!session) return;
+  const budget = Number(e.target.value);
+  const seq = ++replanSeq;
+  setStatus(`Re-optimizing for ${money(budget)}…`);
+  try {
+    const data = await api('/api/replan', { session_id: session.id, budget });
+    if (seq !== replanSeq) return;
+    const previous = session.plan;
+    session = { ...session, budget, plan: data.plan };
+    render(data, data.changes, previous);
+    const n = Object.values(data.changes).filter((c) => c !== 'unchanged').length;
+    setStatus(n ? `${n} item${n > 1 ? 's' : ''} changed.` : 'Nothing changed at this budget.');
+  } catch (err) {
+    if (seq === replanSeq) setStatus(err.message, 'error');
+  }
+});
+
+for (const b of document.querySelectorAll('[data-example]')) {
+  b.addEventListener('click', () => {
+    const ex = EXAMPLES[b.dataset.example];
+    $('scenario').value = ex.scenario; $('budget').value = ex.budget; $('image-url').value = ex.url;
+  });
+}
+</script>
+</body>
+</html>

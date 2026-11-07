@@ -16,6 +16,10 @@ Every /api/* route except /api/firebase-config needs a signed-in user (src/auth.
   /api/llm/check      one LLM gateway call
   /api/tool-call      one tool call, end to end — the model asks, this app runs it on
                        MCP, the model answers
+
+GhostCart (src/agent/, page at /ghostcart):
+  /api/plan           photo + scenario + budget -> slots, optimized plan, explanation
+  /api/replan         same session, new budget / owned -> re-optimized plan + changes
 """
 import json
 import time
@@ -25,9 +29,12 @@ import httpx
 from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import llm_client
+from .agent import orchestrator, planner
+from .agent.orchestrator import SessionNotFound
+from .agent.planner import PlanError
 from .auth import require_user
 from .config import (FIREBASE_API_KEY, FIREBASE_APP_ID, FIREBASE_AUTH_DOMAIN,
                      FIREBASE_MESSAGING_SENDER_ID, FIREBASE_PROJECT_ID,
@@ -41,6 +48,7 @@ STATIC = ROOT / "static"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.mcp = McpClient()
+    planner.use_client(app.state.mcp)  # one MCP session for the whole app
     yield
     await app.state.mcp.aclose()
 
@@ -60,6 +68,11 @@ def _mcp_error(e: McpError, **extra) -> JSONResponse:
 @app.get("/")
 async def index():
     return FileResponse(STATIC / "index.html")
+
+
+@app.get("/ghostcart")
+async def ghostcart():
+    return FileResponse(STATIC / "ghostcart.html")
 
 
 @app.get("/api/firebase-config")
@@ -279,3 +292,43 @@ def _step(n: int, started: float | None = None, **fields) -> dict:
     if started is not None:
         fields["seconds"] = round(time.perf_counter() - started, 2)
     return {"step": n, **fields}
+
+
+# ── GhostCart: plan and re-plan ──────────────────────────────────────────
+
+class PlanRequest(BaseModel):
+    image_url: str
+    scenario: str = Field(pattern="^(desk|outfit|renter)$")
+    budget: float = Field(gt=0, le=100_000)
+    owned: list[str] = []
+    notes: str = Field(default="", max_length=2000)
+
+
+@app.post("/api/plan")
+async def plan(req: PlanRequest, uid: str = Depends(require_user)):
+    try:
+        return await orchestrator.plan(uid, req.image_url, req.scenario, req.budget,
+                                       req.owned, req.notes)
+    except PlanError as e:
+        # Nothing usable in the photo (or the model never produced slots): the user's
+        # input, not our outage — say what happened.
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except McpError as e:
+        return _mcp_error(e)
+    except (LlmError, httpx.HTTPError) as e:
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
+
+
+class ReplanRequest(BaseModel):
+    session_id: str
+    budget: float = Field(gt=0, le=100_000)
+    owned: list[str] | None = None
+
+
+@app.post("/api/replan")
+async def replan(req: ReplanRequest, uid: str = Depends(require_user)):
+    try:
+        return await orchestrator.replan(uid, req.session_id, req.budget, req.owned)
+    except SessionNotFound:
+        return JSONResponse({"error": "This plan has expired. Generate a new one."},
+                            status_code=404)

@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "app",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["-m", "uvicorn", "src.main:app", "--reload"],
+      "port": 8000,
+      "url": "http://localhost:8000"
+    }
+  ]
+}
