@@ -8,3 +8,6 @@ __pycache__/
 # settings.json is committed: a public HTTPS address and a model name, no secrets.
 # Keys go only in settings.local.json.
 .claude/settings.local.json
+
+# Throwaway experiments
+scratch/
