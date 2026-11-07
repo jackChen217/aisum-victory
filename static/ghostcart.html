@@ -15,6 +15,15 @@
   .form input, .form select, .form textarea {
     font: inherit; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
     background: var(--surface); color: var(--text); width: 100%; box-sizing: border-box; }
+  .drop { display: flex; gap: 14px; align-items: center; padding: 14px;
+          border: 2px dashed var(--border); border-radius: 10px; background: var(--bg); }
+  .drop.over { border-color: var(--accent); background: var(--err-bg); }
+  .drop.busy { opacity: .6; }
+  .drop img { width: 96px; height: 96px; object-fit: cover; border-radius: 8px;
+              flex: none; background: #fff; }
+  .drop-text { display: grid; gap: 6px; font-size: 14px; color: var(--muted); }
+  .drop-text button { justify-self: start; }
+  .upload-note { margin: -4px 0 0; font-size: 13px; color: var(--soft); }
   .examples { font-size: 13px; color: var(--soft); }
   .examples button { font-size: 13px; padding: 2px 8px; }
   #status { min-height: 1.4em; font-size: 14px; color: var(--muted); margin: 8px 0 0; }
@@ -99,9 +108,19 @@
             <input type="number" id="budget" min="1" step="1" value="350" required>
           </label>
         </div>
+        <div id="drop" class="drop">
+          <img id="preview" alt="" hidden>
+          <div class="drop-text">
+            <button type="button" id="pick">Upload image</button>
+            <span>or drag a JPG/PNG here, or paste a screenshot (⌘V). Max 8 MB.</span>
+            <input type="file" id="file" accept="image/jpeg,image/png" hidden>
+          </div>
+        </div>
         <label>Image URL (must open without signing in)
           <input type="url" id="image-url" required placeholder="https://images.unsplash.com/...">
         </label>
+        <p class="upload-note">Uploaded images are stored publicly for up to 1 day so the
+          product search can read them, then deleted.</p>
         <p class="examples">Try:
           <button type="button" data-example="desk">gaming desk</button>
           <button type="button" data-example="outfit">striped top outfit</button>
@@ -274,9 +293,61 @@ $('slider').addEventListener('change', async (e) => {
 for (const b of document.querySelectorAll('[data-example]')) {
   b.addEventListener('click', () => {
     const ex = EXAMPLES[b.dataset.example];
-    $('scenario').value = ex.scenario; $('budget').value = ex.budget; $('image-url').value = ex.url;
+    $('scenario').value = ex.scenario; $('budget').value = ex.budget; setImage(ex.url);
   });
 }
+
+// ── Image upload: button, drag and drop, paste ─────────────────────────
+const MAX_UPLOAD = 8 * 1024 * 1024;
+
+function setImage(url) {
+  $('image-url').value = url;
+  $('preview').hidden = !url;
+  if (url) $('preview').src = url;
+}
+$('image-url').addEventListener('change', (e) => setImage(e.target.value.trim()));
+$('preview').addEventListener('error', () => { $('preview').hidden = true; });
+
+async function uploadFile(file) {
+  if (!file) return;
+  if (!['image/jpeg', 'image/png'].includes(file.type)) {
+    setStatus('Only JPG and PNG images can be uploaded.', 'error'); return;
+  }
+  if (file.size > MAX_UPLOAD) { setStatus('The image is larger than 8 MB.', 'error'); return; }
+  const token = await window.__auth?.token();
+  if (!token) { setStatus('Sign in first.', 'error'); return; }
+  $('drop').classList.add('busy');
+  setStatus(`Uploading ${(file.size / 1024 / 1024).toFixed(1)} MB…`);
+  try {
+    const r = await fetch('/api/upload', { method: 'POST', body: file,
+      headers: { 'Content-Type': file.type, Authorization: `Bearer ${token}` } });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `Upload failed (HTTP ${r.status})`);
+    setImage(data.url);
+    setStatus('Uploaded. Pick a scenario and budget, then generate the plan.');
+  } catch (err) {
+    setStatus(err.message, 'error');
+  } finally {
+    $('drop').classList.remove('busy');
+  }
+}
+
+$('pick').addEventListener('click', () => $('file').click());
+$('file').addEventListener('change', (e) => { uploadFile(e.target.files[0]); e.target.value = ''; });
+for (const ev of ['dragenter', 'dragover']) {
+  $('drop').addEventListener(ev, (e) => { e.preventDefault(); $('drop').classList.add('over'); });
+}
+for (const ev of ['dragleave', 'drop']) {
+  $('drop').addEventListener(ev, (e) => { e.preventDefault(); $('drop').classList.remove('over'); });
+}
+$('drop').addEventListener('drop', (e) => uploadFile(e.dataTransfer.files[0]));
+// Paste anywhere on the page, unless the user is pasting text into a field.
+document.addEventListener('paste', (e) => {
+  const item = [...(e.clipboardData?.items || [])].find((i) => i.kind === 'file' && i.type.startsWith('image/'));
+  if (!item) return;
+  e.preventDefault();
+  uploadFile(item.getAsFile());
+});
 </script>
 </body>
 </html>

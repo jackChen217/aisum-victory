@@ -71,7 +71,8 @@
 - `src/agent/orchestrator.py`：会话存在内存（按 uid + session_id，每人最多 20 个，重启或换 Cloud Run 实例会丢）；`plan` 和 `replan`（只重新优化，不重新搜索）；每次一次 DeepSeek 调用写解释，只能用商品名里实际有的词，出现商品名里没有的颜色、材质、图案词就重试一次，还不行就换成固定的一句话。
 - `src/main.py`：`POST /api/plan`、`POST /api/replan`（都要登录），`GET /ghostcart`。
 - `static/ghostcart.html`（`/ghostcart`）：测试页面，有场景选择（desk / outfit）、图片链接、预算、三个示例按钮、商品卡片、总价和解释、预算滑块和换货标记（Swapped / Added / Removed）。
-- 测试：`.venv/bin/python -m pytest`，74 个用例，全部离线。
+- 图片上传：`POST /api/upload`（要登录），请求体是 JPG/PNG 原始字节（最大 8 MB，按文件头判断类型），存到 bucket `aisum-hackathon-juliet-uploads`（us-central1、uniform access、allUsers 可读、1 天自动删除）的 `uploads/<随机名>`，返回 `https://storage.googleapis.com/...` 公开链接；用 google-cloud-storage + ADC。页面上有上传按钮、拖拽和 ⌘V 粘贴，上传后自动填链接并显示预览。部署到 Cloud Run 时服务账号要有这个 bucket 的 objectCreator 权限，环境变量加 `UPLOAD_BUCKET`。
+- 测试：`.venv/bin/python -m pytest`，81 个用例，全部离线。
 
 实测（Python 直接调 orchestrator）：
 - 电竞桌面 $350：7–8 件，第一次出方案约 50 秒（类别检查那次 DeepSeek 调用约 35 秒）；预算改成 $250 后重新规划约 6 秒。
@@ -87,7 +88,6 @@
 - 每个请求的 LLM 调用次数：desk 是 3 次（拆 slots、类别检查、解释）；outfit 是 2 次加上每个触发纠错的 slot 1 次，可能超过 3 次。
 
 还没做：
-- 图片上传（`/api/upload`，存到自建 Cloud Storage bucket，返回公开链接）
 - 部署到 Cloud Run
 - 正式前端页面
 - pitch deck 和拉用户计划

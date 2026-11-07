@@ -20,18 +20,19 @@ Every /api/* route except /api/firebase-config needs a signed-in user (src/auth.
 GhostCart (src/agent/, page at /ghostcart):
   /api/plan           photo + scenario + budget -> slots, optimized plan, explanation
   /api/replan         same session, new budget / owned -> re-optimized plan + changes
+  /api/upload         JPEG/PNG bytes (max 8 MB) -> public Cloud Storage URL
 """
 import json
 import time
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import llm_client
+from . import llm_client, uploads
 from .agent import orchestrator, planner
 from .agent.orchestrator import SessionNotFound
 from .agent.planner import PlanError
@@ -332,3 +333,32 @@ async def replan(req: ReplanRequest, uid: str = Depends(require_user)):
     except SessionNotFound:
         return JSONResponse({"error": "This plan has expired. Generate a new one."},
                             status_code=404)
+
+
+# ── Image upload ─────────────────────────────────────────────────────────
+
+@app.post("/api/upload")
+async def upload(request: Request, uid: str = Depends(require_user)):
+    """The raw image is the request body (Content-Type image/jpeg or image/png).
+
+    Read in chunks and cut off past the limit, so an oversized upload is refused
+    without holding all of it in memory.
+    """
+    if not uploads.bucket_name():
+        return JSONResponse({"error": "Uploads are not configured (UPLOAD_BUCKET)."},
+                            status_code=503)
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > uploads.MAX_BYTES:
+        return JSONResponse({"error": "The image is larger than 8 MB."}, status_code=413)
+    data = bytearray()
+    async for chunk in request.stream():
+        data += chunk
+        if len(data) > uploads.MAX_BYTES:
+            return JSONResponse({"error": "The image is larger than 8 MB."}, status_code=413)
+    try:
+        return await uploads.save(bytes(data))
+    except uploads.UploadError as e:
+        return JSONResponse({"error": str(e)}, status_code=415 if "JPEG" in str(e) else 400)
+    except Exception as e:  # storage / credentials: say which, do not leak a trace
+        return JSONResponse({"error": f"Upload failed: {type(e).__name__}: {e}"[:300]},
+                            status_code=502)
