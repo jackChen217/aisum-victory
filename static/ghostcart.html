@@ -25,6 +25,14 @@
   .drop-text button { justify-self: start; }
   .upload-note { margin: -4px 0 0; font-size: 13px; color: var(--soft); }
   .examples { font-size: 13px; color: var(--soft); }
+  .go-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .form .override { display: flex; align-items: center; gap: 6px; font-size: 13px;
+                    color: var(--soft); }
+  .form .override select { width: auto; padding: 3px 6px; font-size: 13px; }
+  .agent-line { margin: 8px 0 0; font-size: 14px; color: var(--muted); background: var(--bg);
+                border-radius: 8px; padding: 8px 12px; }
+  .agent-line strong { color: var(--text); }
+  .agent-line ul { margin: 4px 0 0; padding-left: 18px; }
   .examples button { font-size: 13px; padding: 2px 8px; }
   #status { min-height: 1.4em; font-size: 14px; color: var(--muted); margin: 8px 0 0; }
   #status[data-state="error"] { color: var(--err); }
@@ -121,16 +129,10 @@
     <section class="card">
       <form id="plan-form" class="form">
         <div class="inline">
-          <label>Scenario
-            <select id="scenario">
-              <option value="desk">Desk setup</option>
-              <option value="outfit">Outfit</option>
-            </select>
-          </label>
           <label>Budget (USD)
             <input type="number" id="budget" min="1" step="1" value="350" required>
           </label>
-          <label id="gender-wrap" hidden>Shopping for
+          <label id="gender-wrap">Shopping for (outfits)
             <select id="gender">
               <option value="">Any</option>
               <option value="F">Women</option>
@@ -156,7 +158,18 @@
           <button type="button" data-example="outfit">striped top outfit</button>
           <button type="button" data-example="winter">winter coat outfit</button>
         </p>
-        <div><button id="go" class="primary" type="submit">Generate plan</button></div>
+        <div class="go-row">
+          <button id="go" class="primary" type="submit">Generate plan</button>
+          <!-- Auto-detect is the default: image search decides outfit vs desk. This only
+               overrides it when the guess is wrong. -->
+          <label class="override">Type:
+            <select id="scenario">
+              <option value="auto">Auto-detect</option>
+              <option value="outfit">Outfit</option>
+              <option value="desk">Desk setup</option>
+            </select>
+          </label>
+        </div>
       </form>
       <p id="status"></p>
     </section>
@@ -179,6 +192,7 @@
         <div class="total"><span id="total"></span> <small id="of-budget"></small></div>
       </div>
       <p class="explain" id="explanation"></p>
+      <div class="agent-line" id="agent-line" hidden></div>
       <label class="slider" id="slider-wrap">
         <span>Change the budget: <strong id="slider-val"></strong> — the plan re-optimizes
           over the same products, no new search.</span>
@@ -206,11 +220,11 @@
 const $ = (id) => document.getElementById(id);
 
 const EXAMPLES = {
-  desk: { scenario: 'desk', budget: 350,
+  desk: { scenario: 'auto', budget: 350,
     url: 'https://images.unsplash.com/photo-1696710257827-75e2e5954059?w=1080&q=85&fm=jpg' },
-  outfit: { scenario: 'outfit', budget: 150,
+  outfit: { scenario: 'auto', budget: 150,
     url: 'https://images.unsplash.com/photo-1758543144593-95061a3f418a?w=1080&q=85&fm=jpg' },
-  winter: { scenario: 'outfit', budget: 150,
+  winter: { scenario: 'auto', budget: 150,
     url: 'https://images.unsplash.com/photo-1652473291442-7a2e034a00d1?w=1080&q=85&fm=jpg' },
 };
 const REASONS = { over_budget: 'over budget', owned: 'you own it', no_candidates: 'nothing found' };
@@ -298,15 +312,18 @@ function setupSlider(budget) {
 $('plan-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const budget = Number($('budget').value);
-  const scenario = $('scenario').value;
-  const body = { image_url: $('image-url').value.trim(), scenario, budget,
-                 gender: scenario === 'outfit' ? ($('gender').value || null) : null };
+  const requested = $('scenario').value;
+  const body = { image_url: $('image-url').value.trim(), scenario: requested, budget,
+                 gender: requested === 'desk' ? null : ($('gender').value || null) };
   $('go').disabled = true;
   setStatus('Reading the photo, searching and checking products… this takes up to a minute.');
   const t0 = performance.now();
   try {
     const data = await api('/api/plan', body);
-    session = { id: data.session_id, budget, plan: data.plan, scenario, image: body.image_url };
+    session = { id: data.session_id, budget, plan: data.plan, scenario: data.scenario,
+                image: body.image_url,
+                layers: Object.fromEntries(data.slots.map((s) => [s.slot, s.layer])) };
+    renderAgentLine(data.report?._review);
     setupSlider(budget);
     render(data);
     setStatus(`Done in ${((performance.now() - t0) / 1000).toFixed(1)}s · ${data.slots.length} items looked for.`);
@@ -397,7 +414,30 @@ document.addEventListener('paste', (e) => {
 });
 
 // ── Gender (outfit only; the user's own choice, never guessed) ─────────
-function showGender() { $('gender-wrap').hidden = $('scenario').value !== 'outfit'; }
+function showGender() { $('gender-wrap').hidden = $('scenario').value === 'desk'; }
+
+// What the outfit review changed: the items it added and the descriptions it fixed.
+function renderAgentLine(review) {
+  const box = $('agent-line'); box.replaceChildren();
+  const added = review?.added || [], fixed = review?.corrected || [];
+  box.hidden = !(added.length || fixed.length);
+  if (box.hidden) return;
+  const head = document.createElement('strong');
+  head.textContent = `The agent added ${added.length} item${added.length === 1 ? '' : 's'} `
+    + `and corrected ${fixed.length} description${fixed.length === 1 ? '' : 's'}.`;
+  const ul = document.createElement('ul');
+  for (const a of added) {
+    const li = document.createElement('li');
+    li.textContent = `Added ${label(a.slot)}: ${a.query}`;
+    ul.append(li);
+  }
+  for (const c of fixed) {
+    const li = document.createElement('li');
+    li.textContent = `${label(c.slot)}: "${c.from}" → "${c.to}"`;
+    ul.append(li);
+  }
+  box.append(head, ul);
+}
 $('scenario').addEventListener('change', showGender);
 showGender();
 
@@ -406,13 +446,18 @@ showGender();
 // unmatched counts as an accessory and goes in the top row.
 const ZONES = [
   ['side', /bag|tote|purse|backpack|clutch|wallet/],
-  ['feet', /shoe|sneaker|boot|heel|sandal|loafer|flat|slipper|mule|clog/],
+  ['feet', /shoe|sneaker|boot|heel|sandal|loafer|flat|slipper|mule|clog|sock/],
   ['bottom', /pant|jean|trouser|skirt|short|legging|jogger/],
   ['top', /coat|jacket|blazer|cardigan|sweater|hoodie|shirt|top|blouse|tee|vest|dress|jumpsuit|parka|outer/],
   ['head', /hat|cap|beanie|beret|fedora|glass|earring|necklace|scarf|tie|jewel|watch|bracelet|belt/],
 ];
 const ROWS = ['head', 'top', 'bottom', 'feet'];
-const zoneOf = (slot) => (ZONES.find(([, re]) => re.test(slot)) || ['head'])[0];
+// Items the review added carry a layer; it is more reliable than the slot name.
+const LAYER_ZONE = { headwear: 'head', accessory: 'head', inner: 'top', mid: 'top',
+  outer: 'top', top: 'top', dress: 'top', bottom: 'bottom', footwear: 'feet',
+  socks: 'feet', bag: 'side' };
+const zoneOf = (slot) => LAYER_ZONE[session?.layers?.[slot]]
+  || (ZONES.find(([, re]) => re.test(slot)) || ['head'])[0];
 
 function boardLayout(plan) {
   const zones = { head: [], top: [], bottom: [], feet: [], side: [] };

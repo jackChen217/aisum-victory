@@ -63,9 +63,10 @@
 - `src/agent/optimizer.py`：多重选择背包（按美分做精确 DP）；quality = 1/(1+rank)，按搜索结果的排名算，不用 score；去掉没价格和名字带 "Renewed" 的商品；`diff_plans` 比较前后两版方案。
 - `src/agent/planner.py`：
   - desk / renter：一次 DeepSeek 看图调用拆出 slots（**DeepSeek v4.1 flash 支持看图**，OpenAI `image_url` 格式），最多 8 个，解析失败重试一次。
+  - 场景自动判断（默认 `scenario: "auto"`）：先调 `search_products_by_image`，有 detection 就是 outfit，没有（返回 `note`）就按 desk 让 DeepSeek 拆清单。页面上保留一个小的手动覆盖选项。
   - outfit：`search_products_by_image`（带 `max_price` = 预算），item 和 item_detail 都相同的 detection（比如左右鞋）合并成一个 slot。
   - 每个 slot 用 `search_products_by_text` 并发搜候选（max_price = 预算，top_k = 15），清洗：按 p_key 去重、名字近似重复只留第一个、去掉乱码名字。
-  - 自我纠错：服饰 slot 候选少于 5 个或第一名 score 低于 0.45 时，让 DeepSeek 看图写更精确的描述，再用文字搜索（domain = fashion）补搜。
+  - 穿搭审核（`review_outfit`，替换了原来的自我纠错，一次 DeepSeek 看图调用）：把原图和 detections（item、item_detail、box）一起发过去，返回 keep / correct / missing。correct 的用精确描述做文字搜索（domain = fashion、gender、max_price），结果排在图片结果前面；missing 的（最多 3 件）新增为可选 slot 再文字搜索。失败或 JSON 解析不了就按原 detections 继续。`report["_review"]` 记录 corrected、added、unconfirmed；页面上显示 "The agent added N items and corrected M descriptions"。
   - 类别检查：每个 slot 一次 DeepSeek 调用，最多 4 个并行，去掉类别不对的候选（比如 keyboard 里的键帽、speaker 里的替换喇叭）；某个 slot 失败就保留它的原候选。
   - 性别：outfit 可以传用户自己选的 `gender`（F / M），用于图片搜索和之后的文字搜索；不选就是 Any，绝不自己推断。
   - 乱码：商品名里的 mojibake（`â€`、`Ã©`、`â\x80\x91` 等）先修复成正常字符，修不好的商品才去掉。
@@ -75,7 +76,7 @@
 - `static/ghostcart.html`（`/ghostcart`）：测试页面，有场景选择（desk / outfit）、outfit 的性别选项（Any / Women / Men）、图片上传和链接、预算、三个示例按钮、商品卡片、总价和解释、预算滑块和换货标记（Swapped / Added / Removed）。
 - Lookboard（只在 outfit）：结果区上方，左边原图，右边按穿着位置排列（帽子/配饰 → 外套/上衣 → 裤子/裙子 → 鞋，包在旁边），下面是总价和预算；改预算会跟着更新。"Download image" 用 canvas 导出 1200×900 PNG，商品图通过 `GET /api/lookboard-image?session_id=&slot=` 代理（只能取自己会话里的图，只允许 https 公网地址、不跟随跳转）。
 - 图片上传：`POST /api/upload`（要登录），请求体是 JPG/PNG 原始字节（最大 8 MB，按文件头判断类型），存到 bucket `aisum-hackathon-juliet-uploads`（us-central1、uniform access、allUsers 可读、1 天自动删除）的 `uploads/<随机名>`，返回 `https://storage.googleapis.com/...` 公开链接；用 google-cloud-storage + ADC。页面上有上传按钮、拖拽和 ⌘V 粘贴，上传后自动填链接并显示预览。部署到 Cloud Run 时服务账号要有这个 bucket 的 objectCreator 权限，环境变量加 `UPLOAD_BUCKET`。
-- 测试：`.venv/bin/python -m pytest`，100 个用例，全部离线。
+- 测试：`.venv/bin/python -m pytest`，105 个用例，全部离线。
 
 实测（Python 直接调 orchestrator）：
 - 电竞桌面 $350：7–8 件，第一次出方案约 50 秒（类别检查那次 DeepSeek 调用约 35 秒）；预算改成 $250 后重新规划约 6 秒。
@@ -95,7 +96,8 @@
 - 正式前端页面
 - pitch deck 和拉用户计划
 - 已知问题：
-  - 出方案仍要约 30 秒（outfit 实测 29–36 秒）：类别检查 14–20 秒（5 个 slot 要分两轮）、解释约 8 秒。
+  - 加了穿搭审核后 outfit 出方案要 72–90 秒（改之前 26–31 秒）：审核那次调用约 38 秒，类别检查 35–43 秒（slot 变多、每个 slot 候选变长，6–7 个 slot 要分两轮）。需要提速。
+  - 审核的描述有时不对：截图里的竖条纹衬衫被写成 horizontal striped，羊毛 duffle coat 被写成 corduroy jacket。
   - 场景匹配的 score 全在 0.97 以上，不能用来排序。
   - 文字搜索偶尔把不相关或不合适的商品排得靠前（比如单手键盘）。
   - 服饰的颜色和图案描述不准（千鸟格围巾被说成 black scarf），且 score 过了 0.45 不会触发纠错。

@@ -302,7 +302,7 @@ def _step(n: int, started: float | None = None, **fields) -> dict:
 
 class PlanRequest(BaseModel):
     image_url: str
-    scenario: str = Field(pattern="^(desk|outfit|renter)$")
+    scenario: str = Field(default="auto", pattern="^(auto|desk|outfit|renter)$")
     budget: float = Field(gt=0, le=100_000)
     owned: list[str] = []
     notes: str = Field(default="", max_length=2000)

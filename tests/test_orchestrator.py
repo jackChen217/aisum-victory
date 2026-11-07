@@ -68,7 +68,9 @@ def test_plan_then_replan(client, fakes):
     assert data["explanation"] == "Here is why."
     assert data["report"] == {"mouse": {"ignored_filters": ["domain"]}}
     # Internal slot fields are not sent to the browser.
-    assert all(set(s) <= {"slot", "required", "weight", "query", "domain"} for s in data["slots"])
+    assert all(set(s) <= {"slot", "required", "weight", "query", "domain", "layer", "source",
+                          "detected_as"} for s in data["slots"])
+    assert data["scenario"] == "desk"
     assert fakes["plan_slots"] == [("https://x/desk.jpg", "desk", "black theme", 350)]
 
     r = client.post("/api/replan", json={"session_id": data["session_id"], "budget": 200})
@@ -224,3 +226,33 @@ def test_proxy_refuses_non_public_urls(url):
     import asyncio
     with pytest.raises(main.image_proxy.ImageFetchError):
         asyncio.run(main.image_proxy.fetch(url))
+
+
+def test_auto_outfit_runs_review_once(client, fakes, monkeypatch):
+    async def outfit_slots(image_url, scenario, notes="", budget=None, gender=None):
+        fakes["gender"] = gender
+        return [dict(s, source="image_search", image_url=image_url) for s in SLOTS]
+
+    reviewed = []
+
+    async def review(image_url, slots, report=None):
+        reviewed.append(image_url)
+        report["_review"] = {"corrected": [], "added": [{"slot": "socks"}], "unconfirmed": []}
+        return slots
+
+    monkeypatch.setattr(orchestrator.planner, "plan_slots", outfit_slots)
+    monkeypatch.setattr(orchestrator.planner, "review_outfit", review)
+    d = client.post("/api/plan", json={"image_url": "https://x/o.jpg", "budget": 150,
+                                       "gender": "F"}).json()   # scenario defaults to auto
+    assert d["scenario"] == "outfit" and reviewed == ["https://x/o.jpg"]
+    assert fakes["gender"] == "F"
+    assert d["report"]["_review"]["added"] == [{"slot": "socks"}]
+
+
+def test_desk_does_not_run_review(client, monkeypatch):
+    async def boom(*a, **kw):
+        raise AssertionError("review must not run for desk")
+
+    monkeypatch.setattr(orchestrator.planner, "review_outfit", boom)
+    assert client.post("/api/plan", json={"image_url": "https://x", "scenario": "desk",
+                                          "budget": 350}).status_code == 200

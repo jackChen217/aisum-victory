@@ -31,7 +31,8 @@ log = logging.getLogger(__name__)
 SESSIONS: dict[tuple[str, str], dict] = {}
 MAX_SESSIONS_PER_USER = 20
 
-_PUBLIC_SLOT_KEYS = ("slot", "required", "weight", "query", "domain")
+_PUBLIC_SLOT_KEYS = ("slot", "required", "weight", "query", "domain", "layer", "source",
+                     "detected_as")
 
 _EXPLAIN_RULES = (
     "Rules: 2-4 short sentences, plain English, no lists, no markdown. Use only facts "
@@ -68,12 +69,18 @@ class SessionNotFound(KeyError):
 async def plan(uid: str, image_url: str, scenario: str, budget: float,
                owned: list[str] | None = None, notes: str = "",
                gender: str | None = None) -> dict:
-    """`gender` is the user's own choice (F / M), used for outfit only."""
+    """`scenario` "auto" lets image search decide (outfit if it detects clothing, else
+    desk). `gender` is the user's own choice (F / M), used for outfit only.
+    LLM calls: outfit = review + one category check per slot + explanation;
+    desk = slot planning + category checks + explanation."""
     owned = list(owned or [])
-    gender = gender if scenario == "outfit" else None
+    gender = gender if scenario in ("auto", "outfit") else None
     slots = await planner.plan_slots(image_url, scenario, notes, budget=budget,
                                      gender=gender)
+    scenario = planner.scenario_of(slots) if scenario == "auto" else scenario
     report: dict = {}
+    if scenario == "outfit":
+        slots = await planner.review_outfit(image_url, slots, report=report)
     candidates = await planner.find_candidates(slots, budget, report=report)
     candidates = await planner.check_categories(slots, candidates, report=report)
     result = optimize(slots, candidates, budget, owned)
@@ -88,6 +95,7 @@ async def plan(uid: str, image_url: str, scenario: str, budget: float,
     })
     return {
         "session_id": session_id,
+        "scenario": scenario,
         "slots": [{k: s[k] for k in _PUBLIC_SLOT_KEYS if k in s} for s in slots],
         "plan": result["plan"],
         "dropped": result["dropped"],

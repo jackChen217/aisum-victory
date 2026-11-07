@@ -1,6 +1,7 @@
 """Offline tests: the LLM reply parser, result cleaning, and find_candidates with the
 AISUM adapter replaced. Nothing here calls the network."""
 import asyncio
+import json
 
 import pytest
 
@@ -148,89 +149,6 @@ def test_outfit_without_detections_raises_with_note(monkeypatch):
         asyncio.run(planner.plan_slots("https://x/desk.jpg", "outfit"))
 
 
-# ── self-correction ──────────────────────────────────────────────────────
-
-def outfit_slot(name, n, score):
-    return {"slot": name, "query": f"{name} detail", "item": name, "required": True,
-            "weight": 3, "source": "image_search", "image_url": "https://x/o.jpg",
-            "boxes": [[0.1, 0.2, 0.3, 0.4]], "domain": ["fashion"],
-            "candidates": [dict(p(f"{name}{i}", f"{STYLES[i]} {name}"), score=score)
-                           for i in range(n)]}
-
-
-# Distinct enough that clean() keeps them all.
-STYLES = ["Oversized wool", "Cropped denim", "Quilted puffer", "Linen relaxed",
-          "Faux leather biker", "Knitted chunky", "Corduroy vintage", "Satin evening"]
-
-
-@pytest.fixture
-def refine_env(monkeypatch):
-    calls = {"llm": [], "text": []}
-
-    async def fake_chat(messages, tools=None):
-        calls["llm"].append(messages)
-        return {"message": {"content": '"cream houndstooth wool blanket scarf"\n'},
-                "finish_reason": "stop"}
-
-    async def fake_text(query, *, domain=None, min_price=None, max_price=None, gender=None, top_k=10):
-        calls["text"].append({"query": query, "domain": domain, "max_price": max_price})
-        calls.setdefault("gender", []).append(gender)
-        return {"results": [p("t1", "Text result one"), p("t2", "Another text hit")]}
-
-    monkeypatch.setattr(planner.llm_client, "chat", fake_chat)
-    monkeypatch.setattr(planner, "search_text", fake_text)
-    return calls
-
-
-def test_strong_slot_is_not_refined(refine_env):
-    report = {}
-    out = asyncio.run(planner.find_candidates([outfit_slot("coat", 6, 0.7)], 150, report))
-    assert len(out["coat"]) == 6
-    assert report == {} and refine_env["llm"] == [] and refine_env["text"] == []
-
-
-def test_few_candidates_appends_text_results(refine_env):
-    report = {}
-    out = asyncio.run(planner.find_candidates([outfit_slot("shoe", 2, 0.7)], 150, report))
-    assert [x["p_key"] for x in out["shoe"]] == ["shoe0", "shoe1", "t1", "t2"]
-    assert report["shoe"]["refined"] == {"reasons": ["few_candidates"],
-                                         "query": "cream houndstooth wool blanket scarf",
-                                         "added": 2}
-    assert refine_env["text"] == [{"query": "cream houndstooth wool blanket scarf",
-                                   "domain": ["fashion"], "max_price": 150}]
-    # The model saw the original photo and where the item is.
-    content = refine_env["llm"][0][0]["content"]
-    assert content[1] == {"type": "image_url", "image_url": {"url": "https://x/o.jpg"}}
-    assert "[0.1, 0.2, 0.3, 0.4]" in content[0]["text"]
-
-
-def test_low_score_puts_text_results_first(refine_env):
-    report = {}
-    out = asyncio.run(planner.find_candidates([outfit_slot("scarf", 8, 0.40)], 150, report))
-    assert [x["p_key"] for x in out["scarf"]][:3] == ["t1", "t2", "scarf0"]
-    assert report["scarf"]["refined"]["reasons"] == ["low_score"]
-
-
-def test_threshold_is_per_tool(refine_env):
-    # A text-search slot with a low score is not refined: no threshold for that tool,
-    # and no photo to look at.
-    slot = {"slot": "lamp", "query": "desk lamp", "domain": ["home_living"]}
-    report = {}
-    asyncio.run(planner.find_candidates([slot], 150, report))
-    assert refine_env["llm"] == [] and "refined" not in report.get("lamp", {})
-
-
-def test_refine_failure_keeps_candidates(monkeypatch, refine_env):
-    async def broken_chat(messages, tools=None):
-        raise planner.LlmError("gateway down")
-
-    monkeypatch.setattr(planner.llm_client, "chat", broken_chat)
-    report = {}
-    out = asyncio.run(planner.find_candidates([outfit_slot("shoe", 2, 0.3)], 150, report))
-    assert [x["p_key"] for x in out["shoe"]] == ["shoe0", "shoe1"]
-    assert report["shoe"]["refine_error"] == "LlmError: gateway down"
-
-
 # ── check_categories ─────────────────────────────────────────────────────
 
 CAT_SLOTS = [{"slot": "desk", "query": "black gaming desk"},
@@ -313,20 +231,6 @@ def test_check_categories_bad_reply_keeps_slot(monkeypatch):
 
 # ── gender and mojibake ─────────────────────────────────────────────────
 
-def test_outfit_gender_goes_to_image_and_text_search(monkeypatch, refine_env):
-    seen = {}
-
-    async def fake_image(image_url, *, min_price=None, max_price=None, gender=None, top_k=15):
-        seen["gender"] = gender
-        return {"detections": [det("shoe", "brown loafer", "s1")]}
-
-    monkeypatch.setattr(planner, "search_image", fake_image)
-    slots = asyncio.run(planner.plan_slots("https://x/o.jpg", "outfit", budget=150, gender="M"))
-    assert seen["gender"] == "M" and slots[0]["gender"] == "M"
-    asyncio.run(planner.find_candidates(slots, 150, {}))  # 1 candidate -> refine + text search
-    assert refine_env["gender"] == ["M"]
-
-
 def test_gender_must_be_a_tool_value():
     with pytest.raises(ValueError):
         asyncio.run(planner.plan_slots("https://x", "outfit", gender="Women"))
@@ -351,3 +255,134 @@ def test_clean_repairs_without_touching_original():
     out = planner.clean([original, p("b", "bad \ufffd")])
     assert [x["product_name"] for x in out] == ["Laptop 15” 16:10"]
     assert original["product_name"] == "Laptop 15â€ 16:10"
+
+
+# ── auto scenario ────────────────────────────────────────────────────────
+
+def test_auto_uses_outfit_when_clothes_are_detected(monkeypatch):
+    async def fake_image(image_url, **kw):
+        return {"detections": [det("coat", "red coat", "c1")]}
+
+    monkeypatch.setattr(planner, "search_image", fake_image)
+    slots = asyncio.run(planner.plan_slots("https://x", "auto", budget=100))
+    assert planner.scenario_of(slots) == "outfit" and slots[0]["slot"] == "coat"
+
+
+def test_auto_falls_back_to_desk_planning(monkeypatch):
+    async def fake_image(image_url, **kw):
+        return {"detections": [], "note": "Image shows furniture and electronics."}
+
+    async def fake_chat(messages, tools=None):
+        assert "desk or workstation" in messages[1]["content"][0]["text"]
+        return {"message": {"content": '[{"slot": "monitor", "query": "27 inch monitor"}]'}}
+
+    monkeypatch.setattr(planner, "search_image", fake_image)
+    monkeypatch.setattr(planner.llm_client, "chat", fake_chat)
+    slots = asyncio.run(planner.plan_slots("https://x", "auto", budget=100))
+    assert planner.scenario_of(slots) == "desk" and slots[0]["slot"] == "monitor"
+
+
+# ── review_outfit ────────────────────────────────────────────────────────
+
+def outfit_slots(gender="M"):
+    res = {"detections": [
+        det("jacket", "brown jacket", "j1", box=(0.3, 0.2, 0.7, 0.6)),
+        det("shorts", "black shorts", box=(0.3, 0.55, 0.7, 0.75)),        # no products
+        det("shoe", "black shoe", "s1", box=(0.3, 0.9, 0.4, 1.0)),
+        det("shoe", "black shoe", "s2", box=(0.6, 0.9, 0.7, 1.0)),        # merged with #2
+    ]}
+    return planner._outfit_slots(res, "https://x/o.jpg", gender)
+
+
+def review_reply(payload):
+    async def chat(messages, tools=None):
+        chat.calls.append(messages)
+        return {"message": {"content": payload if isinstance(payload, str) else json.dumps(payload)}}
+    chat.calls = []
+    return chat
+
+
+def test_review_corrects_adds_and_records(monkeypatch):
+    chat = review_reply({"keep": [2, 3], "correct": [
+        {"id": 0, "description": "rust red wool duffle coat with toggle buttons"},
+        {"id": 1, "description": "black leather mini skirt"}],
+        "missing": [{"slot": "Socks", "layer": "socks", "description": "white crew socks"},
+                    {"slot": "shoes", "layer": "footwear", "description": "dupe of shoe"},
+                    {"slot": "cap", "layer": "headwear", "description": "red baseball cap"},
+                    {"slot": "belt", "layer": "weird", "description": "black leather belt"},
+                    {"slot": "scarf", "layer": "accessory", "description": "over the limit"}]})
+    monkeypatch.setattr(planner.llm_client, "chat", chat)
+    report = {}
+    slots = asyncio.run(planner.review_outfit("https://x/o.jpg", outfit_slots(), report))
+
+    assert len(chat.calls) == 1  # one call for the whole outfit
+    sent = chat.calls[0][0]["content"]
+    assert sent[1] == {"type": "image_url", "image_url": {"url": "https://x/o.jpg"}}
+    assert '"id": 3' in sent[0]["text"] and "[0.6, 0.9, 0.7, 1.0]" in sent[0]["text"]
+
+    by = {s["slot"]: s for s in slots}
+    assert by["jacket"]["refine_query"] == "rust red wool duffle coat with toggle buttons"
+    assert by["jacket"]["detected_as"] == "brown jacket"
+    assert "refine_query" not in by["shoe"]
+    # "shoes" duplicates "shoe"; only the first 3 missing items are considered.
+    assert [s["slot"] for s in slots if s["source"] == "review"] == ["socks", "cap"]
+    assert by["socks"]["required"] is False and by["socks"]["gender"] == "M"
+    assert "candidates" not in by["socks"]
+    assert report["_review"]["corrected"] == [
+        {"slot": "jacket", "from": "brown jacket", "to": "rust red wool duffle coat with toggle buttons"},
+        {"slot": "shorts", "from": "black shorts", "to": "black leather mini skirt"}]
+    assert [a["slot"] for a in report["_review"]["added"]] == ["socks", "cap"]
+
+
+def test_review_unconfirmed_detection_is_kept_and_noted(monkeypatch):
+    monkeypatch.setattr(planner.llm_client, "chat", review_reply({"keep": [0, 2], "correct": [], "missing": []}))
+    report = {}
+    slots = asyncio.run(planner.review_outfit("https://x", outfit_slots(), report))
+    assert [s["slot"] for s in slots] == ["jacket", "shorts", "shoe"]
+    assert report["_review"] == {"corrected": [], "added": [], "unconfirmed": ["shorts"]}
+
+
+@pytest.mark.parametrize("reply", ["no json here", '{"keep": "all"', planner.LlmError("down")])
+def test_review_failure_keeps_original_flow(monkeypatch, reply):
+    async def chat(messages, tools=None):
+        if isinstance(reply, Exception):
+            raise reply
+        return {"message": {"content": reply}}
+
+    monkeypatch.setattr(planner.llm_client, "chat", chat)
+    report, original = {}, outfit_slots()
+    assert asyncio.run(planner.review_outfit("https://x", original, report)) == original
+    assert "error" in report["_review"]
+
+
+def test_corrected_and_added_slots_are_searched(monkeypatch):
+    monkeypatch.setattr(planner.llm_client, "chat", review_reply({"keep": [2, 3], "correct": [
+        {"id": 1, "description": "black leather mini skirt"}],
+        "missing": [{"slot": "socks", "layer": "socks", "description": "white crew socks"}]}))
+    searched = []
+
+    async def fake_text(query, *, domain=None, min_price=None, max_price=None, gender=None, top_k=10):
+        searched.append((query, domain, gender, max_price))
+        return {"results": [p(f"t-{query[:5]}", f"Text hit for {query}")]}
+
+    monkeypatch.setattr(planner, "search_text", fake_text)
+    slots = asyncio.run(planner.review_outfit("https://x", outfit_slots(gender="F")))
+    report = {}
+    out = asyncio.run(planner.find_candidates(slots, 150, report))
+    assert sorted(searched) == [("black leather mini skirt", ["fashion"], "F", 150),
+                                ("white crew socks", ["fashion"], "F", 150)]
+    assert [x["p_key"] for x in out["shorts"]] == ["t-black"]          # had no image products
+    assert [x["p_key"] for x in out["jacket"]] == ["j1"]               # kept: not searched again
+    assert [x["p_key"] for x in out["socks"]] == ["t-white"]
+    assert report["shorts"]["corrected_search"] == {"query": "black leather mini skirt", "added": 1}
+
+
+def test_corrected_results_go_before_image_results(monkeypatch):
+    slot = dict(outfit_slots()[0], refine_query="rust duffle coat")
+
+    async def fake_text(query, **kw):
+        return {"results": [p("t1", "Duffle coat with toggles")]}
+
+    monkeypatch.setattr(planner, "search_text", fake_text)
+    out = asyncio.run(planner.find_candidates([slot], 150, {}))
+    assert [x["p_key"] for x in out["jacket"]] == ["t1", "j1"]

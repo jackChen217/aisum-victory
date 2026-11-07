@@ -156,14 +156,28 @@ async def plan_slots(image_url: str, scenario: str, notes: str = "",
     `gender` (F / M / KIDS / UNISEX) only when the USER chose it — never inferred: many
     products carry no gender, so a guessed filter silently removes correct results.
     Used by outfit only; it is passed to image search and kept on each slot so the
-    follow-up text searches use it too."""
-    if scenario not in SCENARIOS:
-        raise ValueError(f"unknown scenario {scenario!r}; one of {', '.join(SCENARIOS)}")
+    follow-up text searches use it too.
+
+    scenario "auto": image search first. Detections mean outfit; none (the photo is not
+    fashion, the tool says so in `note`) means desk, planned by DeepSeek. Which one was
+    used shows on the slots: outfit slots have source "image_search" (scenario_of)."""
+    if scenario != "auto" and scenario not in SCENARIOS:
+        raise ValueError(f"unknown scenario {scenario!r}; auto or one of {', '.join(SCENARIOS)}")
     if gender is not None and gender not in GENDERS:
         raise ValueError(f"gender must be one of {', '.join(sorted(GENDERS))} or None")
-    if scenario == "outfit":
-        return await _outfit_slots(image_url, budget, gender)
+    if scenario in ("auto", "outfit"):
+        res = await search_image(image_url, max_price=budget, gender=gender)
+        if res.get("detections"):
+            return _outfit_slots(res, image_url, gender)
+        if scenario == "outfit":
+            raise PlanError(res.get("note") or "No fashion items were detected in the photo.")
+        scenario = "desk"
     return await _llm_slots(image_url, scenario, notes)
+
+
+def scenario_of(slots: list[dict]) -> str:
+    """"outfit" when the slots came from image search, else "desk" (the auto fallback)."""
+    return "outfit" if any(s.get("source") == "image_search" for s in slots) else "desk"
 
 
 async def _llm_slots(image_url: str, scenario: str, notes: str) -> list[dict]:
@@ -238,24 +252,25 @@ def _parse_slots(content: str, default_domain: list[str]) -> list[dict]:
     return slots
 
 
-async def _outfit_slots(image_url: str, budget: float | None = None,
-                        gender: str | None = None) -> list[dict]:
-    res = await search_image(image_url, max_price=budget, gender=gender)
+def _outfit_slots(res: dict, image_url: str, gender: str | None = None) -> list[dict]:
+    """Image-search detections -> slots. Each slot keeps its detections (numbered in
+    the order the tool returned them) so review_outfit can refer to them."""
     detections = res.get("detections") or []
-    if not detections:
-        raise PlanError(res.get("note") or "No fashion items were detected in the photo.")
 
     # A left and a right shoe come back as two detections with the same item and
     # item_detail. They are one thing to buy: merge them, products in detection order.
     merged: dict[tuple[str, str], dict] = {}
-    for d in detections:
+    for i, d in enumerate(detections):
         item = (d.get("item") or "item").strip().lower()
         detail = (d.get("item_detail") or item).strip().lower()
         group = merged.setdefault((item, detail), {"item": item, "detail": detail,
-                                                   "boxes": [], "products": []})
+                                                   "boxes": [], "products": [],
+                                                   "detections": []})
         if d.get("box"):
             group["boxes"].append(d["box"])
         group["products"] += d.get("products") or []
+        group["detections"].append({"id": i, "item": item, "item_detail": detail,
+                                    "box": d.get("box")})
 
     slots, counts = [], {}
     for g in merged.values():
@@ -266,7 +281,8 @@ async def _outfit_slots(image_url: str, budget: float | None = None,
         slot = {"slot": name, "required": True, "weight": 3, "query": g["detail"],
                 "domain": list(SCENARIOS["outfit"]["domain"]),
                 "candidates": g["products"], "source": "image_search",
-                "image_url": image_url, "item": g["item"], "boxes": g["boxes"]}
+                "image_url": image_url, "item": g["item"], "boxes": g["boxes"],
+                "detections": g["detections"]}
         if gender:
             slot["gender"] = gender
         if res.get("ignored_filters"):
@@ -345,67 +361,154 @@ def clean(products: list[dict]) -> list[dict]:
     return out
 
 
-# Self-correction: when a slot's candidates from a tool look weak, DeepSeek re-reads
-# the photo for a sharper description and a text search adds to the candidates.
-# Thresholds are per tool because score scales differ between tools.
-MIN_CANDIDATES = 5
-MIN_TOP_SCORE = {"image_search": 0.45}
+# ── outfit review ────────────────────────────────────────────────────────
+# One DeepSeek call that looks at the photo next to what image search detected, and
+# returns which detections are right, sharper descriptions for the ones that are vague
+# or wrong, and up to MAX_MISSING clearly visible items the detector missed.
 
-_REFINE_PROMPT = (
-    "Look at the {detail} ({item}) worn in this photo{where}. Write ONE English "
-    "product search query that describes exactly that item: colour, pattern, material, "
-    "cut or style, and the item type, in 4-12 words. Example: \"cream houndstooth "
-    "oversized wool blanket scarf\". No brand guesses, no price. Reply with only the query."
+MAX_MISSING = 3
+LAYERS = {"headwear", "accessory", "inner", "mid", "outer", "top", "bottom", "dress",
+          "footwear", "socks", "bag"}
+
+_REVIEW_PROMPT = (
+    "You check an automatic clothing detector against the photo. DETECTIONS below are "
+    "what it found, numbered; box is [x1, y1, x2, y2], normalized, origin top-left.\n"
+    "Reply with ONLY this JSON, no prose:\n"
+    '{"keep": [ids that are correct as described],\n'
+    ' "correct": [{"id": id, "description": "..."}],\n'
+    ' "missing": [{"slot": "snake_case_item_type", "layer": "...", "description": "..."}]}\n'
+    "Rules:\n"
+    "- Every id goes in keep or correct. Correct an id when its item type is wrong (a "
+    "skirt detected as shorts) or its description misses what a shopper would search "
+    "for.\n"
+    "- A description is an English shopping query for that one item: colour, pattern "
+    "(for stripes: direction and width, e.g. thin vertical stripes), material if clearly "
+    "visible, and the specific style name (duffle coat with toggle buttons, high-top "
+    "sneakers, leather mini skirt). 4-14 words. No brands, no prices.\n"
+    "- missing: wearable items clearly visible in the photo that no detection covers "
+    "(a layer under a jacket, socks, a cap, a belt, a bag). Only what you can clearly "
+    "see; do not guess hidden items; do not repeat a detected item. At most "
+    f"{MAX_MISSING}. layer is one of: " + ", ".join(sorted(LAYERS)) + ".\n"
+    "- If everything is right and nothing is missing, keep all ids and leave the other "
+    "lists empty.\n\nDETECTIONS:\n"
 )
 
 
-def _weak(slot: dict, products: list[dict]) -> list[str]:
-    """Why this slot's candidates need help: few_candidates and/or low_score."""
-    reasons = []
-    if len(products) < MIN_CANDIDATES:
-        reasons.append("few_candidates")
-    cutoff = MIN_TOP_SCORE.get(slot.get("source"))
-    top = products[0].get("score") if products else None
-    if cutoff is not None and (not isinstance(top, (int, float)) or top < cutoff):
-        reasons.append("low_score")
-    return reasons
+def _review_detections(slots: list[dict]) -> list[dict]:
+    return sorted((d for s in slots for d in s.get("detections") or []),
+                  key=lambda d: d["id"])
 
 
-async def _refine_query(slot: dict) -> str:
-    """One DeepSeek call on the original image -> a precise text-search query."""
-    boxes = slot.get("boxes") or []
-    where = (f", inside the normalized box {boxes[0]} ([x1, y1, x2, y2], origin top-left)"
-             if boxes else "")
-    prompt = _REFINE_PROMPT.format(detail=slot.get("query") or slot["slot"],
-                                   item=slot.get("item") or slot["slot"], where=where)
-    reply = await llm_client.chat([{"role": "user", "content": [
-        {"type": "text", "text": prompt},
-        {"type": "image_url", "image_url": {"url": slot["image_url"]}},
-    ]}])
-    content = reply["message"].get("content") or ""
-    line = next((ln for ln in content.splitlines() if ln.strip()), "")
-    query = line.strip().strip("`\"' ").strip()[:200]
-    if not query:
-        raise LlmError("the model returned an empty description")
-    return query
+def _parse_review(content: str, ids: set[int]) -> dict:
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip())
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("no JSON object in the reply")
+    try:
+        data = json.loads(text[start:end + 1])
+    except json.JSONDecodeError as e:
+        raise ValueError(f"invalid JSON ({e})") from None
+    if not isinstance(data, dict):
+        raise ValueError("the JSON is not an object")
+
+    def desc(x) -> str:
+        return " ".join(str(x or "").split())[:200]
+
+    keep = {i for i in data.get("keep") or [] if isinstance(i, int) and i in ids}
+    correct = {}
+    for c in data.get("correct") or []:
+        if isinstance(c, dict) and isinstance(c.get("id"), int) and c["id"] in ids:
+            if d := desc(c.get("description")):
+                correct.setdefault(c["id"], d)
+    missing = []
+    for m in data.get("missing") or []:
+        if not isinstance(m, dict):
+            continue
+        name = re.sub(r"[^a-z0-9]+", "_", str(m.get("slot", "")).lower()).strip("_")
+        if name and (d := desc(m.get("description"))):
+            layer = str(m.get("layer", "")).lower()
+            missing.append({"slot": name, "layer": layer if layer in LAYERS else None,
+                            "description": d})
+    return {"keep": keep, "correct": correct, "missing": missing[:MAX_MISSING]}
+
+
+def _same_item(a: str, b: str) -> bool:
+    """"sock" vs "socks", "shoe" vs "shoe_2": the same thing to buy."""
+    a, b = re.sub(r"_\d+$", "", a).rstrip("s"), re.sub(r"_\d+$", "", b).rstrip("s")
+    return a == b
+
+
+async def review_outfit(image_url: str, slots: list[dict],
+                        report: dict | None = None) -> list[dict]:
+    """One DeepSeek call: confirm, correct and complete image-search detections.
+
+    Corrected slots get "refine_query" (and the sharper text as "query"; the
+    detector's words stay in "detected_as"); find_candidates text-searches it and merges
+    the results in. Missing items become optional slots with no candidates, which
+    find_candidates text-searches like any other. Any failure returns `slots`
+    unchanged and the plan goes on as before. report["_review"] records
+    {"corrected": [...], "added": [...], "unconfirmed": [...]} or {"error": ...}.
+    """
+    report = report if report is not None else {}
+    detections = _review_detections(slots)
+    if not detections:
+        return slots
+    listing = [{"id": d["id"], "item": d["item"], "item_detail": d["item_detail"],
+                "box": d["box"]} for d in detections]
+    try:
+        reply = await llm_client.chat([{"role": "user", "content": [
+            {"type": "text", "text": _REVIEW_PROMPT + json.dumps(listing)},
+            {"type": "image_url", "image_url": {"url": image_url}},
+        ]}])
+        review = _parse_review(reply["message"].get("content") or "",
+                               {d["id"] for d in detections})
+    except (LlmError, httpx.HTTPError, ValueError) as e:
+        report["_review"] = {"error": f"{type(e).__name__}: {e}"}
+        log.warning("review_outfit failed, using the detections as they are: %s", e)
+        return slots
+
+    out, corrected, added, unconfirmed = [], [], [], []
+    template = slots[0]
+    for s in slots:
+        s = dict(s)
+        ids = [d["id"] for d in s.get("detections") or []]
+        fix = next((review["correct"][i] for i in ids if i in review["correct"]), None)
+        if fix and fix.lower() != s["query"].lower():
+            corrected.append({"slot": s["slot"], "from": s["query"], "to": fix})
+            s.update(detected_as=s["query"], query=fix, refine_query=fix)
+        elif ids and not any(i in review["keep"] or i in review["correct"] for i in ids):
+            unconfirmed.append(s["slot"])  # neither kept nor corrected: noted, not dropped
+        out.append(s)
+    for m in review["missing"]:
+        if any(_same_item(m["slot"], s["slot"]) for s in out):
+            continue
+        slot = {"slot": m["slot"], "required": False, "weight": 2,
+                "query": m["description"], "domain": ["fashion"], "source": "review",
+                "item": m["slot"].replace("_", " "), "layer": m["layer"]}
+        if template.get("gender"):
+            slot["gender"] = template["gender"]
+        out.append(slot)
+        added.append({"slot": m["slot"], "layer": m["layer"], "query": m["description"]})
+    report["_review"] = {"corrected": corrected, "added": added, "unconfirmed": unconfirmed}
+    return out
 
 
 async def find_candidates(slots: list[dict], budget: float,
                           report: dict | None = None) -> dict[str, list[dict]]:
     """Search every slot at once; return cleaned candidates per slot.
 
-    Slots that already carry candidates (outfit) are not searched again. If those
-    candidates look weak (fewer than MIN_CANDIDATES after cleaning, or the top score
-    under the tool's MIN_TOP_SCORE), DeepSeek describes the item from the photo and a
-    fashion text search adds to them. With a low top score the text results go first,
-    since the image results' order is not trusted; otherwise they go after.
+    - A slot without candidates (desk, renter, or an item review_outfit added) is
+      text-searched with its query, domain and gender.
+    - A slot with image-search candidates keeps them; if review_outfit corrected it
+      ("refine_query"), a fashion text search on the sharper description is merged in,
+      its results first — the correction means the detector's reading was off.
 
-    A slot whose search fails maps to [] (the optimizer then reports no_candidates).
-    Pass a dict as `report` to learn what happened per slot:
+    A slot whose search fails maps to [] (the optimizer then reports no_candidates),
+    or to its image candidates when only the extra search failed. Pass a dict as
+    `report` to learn what happened per slot:
       error            "CODE: message" — the search failed
       ignored_filters  filters the server did not apply
-      refined          {"reasons", "query", "added"} — self-correction ran
-      refine_error     self-correction was needed but failed; candidates unchanged
+      corrected_search {"query", "added"} — the corrected description's search
     """
     report = report if report is not None else {}
     gate = asyncio.Semaphore(MAX_CONCURRENT_SEARCHES)
@@ -415,33 +518,30 @@ async def find_candidates(slots: list[dict], budget: float,
 
     async def text(query: str, domain, gender=None) -> dict:
         async with gate:
-            return await search_text(query, domain=domain or None, max_price=budget,
-                                     gender=gender, top_k=TEXT_TOP_K)
+            res = await search_text(query, domain=domain or None, max_price=budget,
+                                    gender=gender, top_k=TEXT_TOP_K)
+        return res
 
     async def one(slot: dict) -> list[dict]:
         if slot.get("ignored_filters"):
             note(slot, "ignored_filters", slot["ignored_filters"])
-        if not slot.get("candidates") and not slot.get("image_url"):
+        if not slot.get("candidates") and not slot.get("refine_query"):
             res = await text(slot["query"], slot.get("domain"), slot.get("gender"))
             if res.get("ignored_filters"):
                 note(slot, "ignored_filters", res["ignored_filters"])
             return clean(res.get("results") or [])
 
         products = clean(slot.get("candidates") or [])
-        reasons = _weak(slot, products)
-        if not reasons or not slot.get("image_url"):
+        if not slot.get("refine_query"):
             return products
         try:
-            query = await _refine_query(slot)
-            res = await text(query, ["fashion"], slot.get("gender"))
-        except (LlmError, httpx.HTTPError, McpError) as e:
-            note(slot, "refine_error", f"{type(e).__name__}: {e}")
-            log.warning("find_candidates: refining %s failed: %s", slot["slot"], e)
+            res = await text(slot["refine_query"], ["fashion"], slot.get("gender"))
+        except McpError as e:
+            note(slot, "error", f"{e.code}: {e} (corrected search; image results kept)")
             return products
-        extra = res.get("results") or []
-        merged = clean(extra + products if "low_score" in reasons else products + extra)
-        note(slot, "refined", {"reasons": reasons, "query": query,
-                               "added": len(merged) - len(products)})
+        merged = clean((res.get("results") or []) + products)
+        note(slot, "corrected_search", {"query": slot["refine_query"],
+                                        "added": len(merged) - len(products)})
         return merged
 
     results = await asyncio.gather(*(one(s) for s in slots), return_exceptions=True)
