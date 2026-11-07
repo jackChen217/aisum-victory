@@ -69,10 +69,13 @@ def test_clean():
         p("a", "Corsair Vengeance RGB Pro 16GB DDR4 3200 Black"),
         p("a", "same key again"),
         p("b", "Corsair Vengeance RGB Pro 16GB DDR4 3200 - Black"),  # near-duplicate
-        p("c", 'ASUS ROG Strix G15 Gaming Laptop 15â€ 16:10'),        # mojibake
+        p("c", 'ASUS ROG Strix G15 Gaming Laptop 15â€ 16:10'),        # mojibake: repaired
+        p("e", "Broken \ufffd name"),                                 # unrepairable: dropped
         p("d", "Razer BlackWidow V3 Mechanical Keyboard"),
     ]
-    assert [x["p_key"] for x in planner.clean(products)] == ["a", "d"]
+    out = planner.clean(products)
+    assert [x["p_key"] for x in out] == ["a", "c", "d"]
+    assert out[1]["product_name"] == "ASUS ROG Strix G15 Gaming Laptop 15” 16:10"
 
 
 # ── find_candidates ──────────────────────────────────────────────────────
@@ -80,7 +83,7 @@ def test_clean():
 def test_find_candidates(monkeypatch):
     seen = []
 
-    async def fake_search(query, *, domain=None, min_price=None, max_price=None, top_k=10):
+    async def fake_search(query, *, domain=None, min_price=None, max_price=None, gender=None, top_k=10):
         seen.append((query, domain, max_price, top_k))
         if query == "boom":
             raise McpError("busy", code="RATE_LIMITED")
@@ -115,7 +118,7 @@ def det(item, detail, *keys, box=(0, 0, 1, 1), score=0.8):
 def test_outfit_merges_identical_detections_and_passes_budget(monkeypatch):
     seen = {}
 
-    async def fake_image(image_url, *, min_price=None, max_price=None, top_k=15):
+    async def fake_image(image_url, *, min_price=None, max_price=None, gender=None, top_k=15):
         seen["max_price"] = max_price
         return {"detections": [
             det("shoe", "beige shoe", "s1", "s2", box=(0.3, 0.8, 0.4, 0.9)),
@@ -169,8 +172,9 @@ def refine_env(monkeypatch):
         return {"message": {"content": '"cream houndstooth wool blanket scarf"\n'},
                 "finish_reason": "stop"}
 
-    async def fake_text(query, *, domain=None, min_price=None, max_price=None, top_k=10):
+    async def fake_text(query, *, domain=None, min_price=None, max_price=None, gender=None, top_k=10):
         calls["text"].append({"query": query, "domain": domain, "max_price": max_price})
+        calls.setdefault("gender", []).append(gender)
         return {"results": [p("t1", "Text result one"), p("t2", "Another text hit")]}
 
     monkeypatch.setattr(planner.llm_client, "chat", fake_chat)
@@ -241,35 +245,109 @@ def cat_cands():
             "mouse": []}
 
 
-def test_check_categories_one_call_drops_rejected(monkeypatch):
+def test_check_categories_one_call_per_slot(monkeypatch):
     prompts = []
+    replies = {"desk": '```json\n{"reject": [1]}\n```', "speaker": '{"reject": [1, 9, "x"]}'}
 
     async def chat(messages, tools=None):
-        prompts.append(messages[0]["content"])
-        return {"message": {"content": '```json\n{"desk": [1], "speaker": [1, 9, "x"]}\n```'}}
+        prompt = messages[0]["content"]
+        prompts.append(prompt)
+        slot = "desk" if '"slot": "desk"' in prompt else "speaker"
+        return {"message": {"content": replies[slot]}}
 
     monkeypatch.setattr(planner.llm_client, "chat", chat)
     report = {}
     out = asyncio.run(planner.check_categories(CAT_SLOTS, cat_cands(), report))
-    assert len(prompts) == 1  # all slots in one call
-    assert "Gaming Mouse Pad XL" in prompts[0] and '"mouse"' not in prompts[0]  # empty slot skipped
+    assert len(prompts) == 2  # one per slot with candidates; empty "mouse" skipped
     assert [x["p_key"] for x in out["desk"]] == ["d1", "d3"]
     assert [x["p_key"] for x in out["speaker"]] == ["s1"]  # out-of-range / non-int ids ignored
     assert out["mouse"] == []
     assert report["desk"]["category_rejected"] == ["Gaming Mouse Pad XL"]
-    assert report["_category_check"] == {"rejected": 2}
+    assert report["_category_check"] == {"rejected": 2, "failed": []}
 
 
-@pytest.mark.parametrize("failure", ["not json at all", planner.LlmError("down")])
-def test_check_categories_failure_keeps_everything(monkeypatch, failure):
+def test_check_categories_runs_in_parallel_capped(monkeypatch):
+    running, peak = 0, 0
+
     async def chat(messages, tools=None):
-        if isinstance(failure, Exception):
-            raise failure
-        return {"message": {"content": failure}}
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.01)
+        running -= 1
+        return {"message": {"content": '{"reject": []}'}}
+
+    monkeypatch.setattr(planner.llm_client, "chat", chat)
+    slots = [{"slot": f"s{i}", "query": "x"} for i in range(9)]
+    cands = {s["slot"]: [p(s["slot"], "Thing")] for s in slots}
+    asyncio.run(planner.check_categories(slots, cands, {}))
+    assert peak == planner.MAX_CONCURRENT_CHECKS
+
+
+def test_check_categories_one_failure_keeps_that_slot(monkeypatch):
+    async def chat(messages, tools=None):
+        if '"slot": "desk"' in messages[0]["content"]:
+            raise planner.LlmError("down")
+        return {"message": {"content": '{"reject": [1]}'}}
 
     monkeypatch.setattr(planner.llm_client, "chat", chat)
     report = {}
     cands = cat_cands()
     out = asyncio.run(planner.check_categories(CAT_SLOTS, cands, report))
-    assert out == cands
-    assert "error" in report["_category_check"]
+    assert out["desk"] == cands["desk"]  # failed: unchanged
+    assert [x["p_key"] for x in out["speaker"]] == ["s1"]  # the other slot still checked
+    assert report["desk"]["category_error"] == "LlmError: down"
+    assert report["_category_check"] == {"rejected": 1, "failed": ["desk"]}
+
+
+def test_check_categories_bad_reply_keeps_slot(monkeypatch):
+    async def chat(messages, tools=None):
+        return {"message": {"content": "sure, here you go"}}
+
+    monkeypatch.setattr(planner.llm_client, "chat", chat)
+    report = {}
+    cands = cat_cands()
+    assert asyncio.run(planner.check_categories(CAT_SLOTS, cands, report)) == cands
+    assert sorted(report["_category_check"]["failed"]) == ["desk", "speaker"]
+
+
+# ── gender and mojibake ─────────────────────────────────────────────────
+
+def test_outfit_gender_goes_to_image_and_text_search(monkeypatch, refine_env):
+    seen = {}
+
+    async def fake_image(image_url, *, min_price=None, max_price=None, gender=None, top_k=15):
+        seen["gender"] = gender
+        return {"detections": [det("shoe", "brown loafer", "s1")]}
+
+    monkeypatch.setattr(planner, "search_image", fake_image)
+    slots = asyncio.run(planner.plan_slots("https://x/o.jpg", "outfit", budget=150, gender="M"))
+    assert seen["gender"] == "M" and slots[0]["gender"] == "M"
+    asyncio.run(planner.find_candidates(slots, 150, {}))  # 1 candidate -> refine + text search
+    assert refine_env["gender"] == ["M"]
+
+
+def test_gender_must_be_a_tool_value():
+    with pytest.raises(ValueError):
+        asyncio.run(planner.plan_slots("https://x", "outfit", gender="Women"))
+
+
+@pytest.mark.parametrize("raw,fixed", [
+    ("Gaming Laptop 15â€ 16:10 FHD", "Gaming Laptop 15” 16:10 FHD"),
+    ("AMD Ryzenâ„¢ 7", "AMD Ryzen™ 7"),
+    ("CafÃ© Table", "Café Table"),
+    ("Itâ€™s 5Â°C ready", "It’s 5°C ready"),
+    ("1PC Crossbody Bag, Multi\u00e2\u0080\u0091Pocket Purse", "1PC Crossbody Bag, Multi\u2011Pocket Purse"),
+    ("Mixed: CafÃ© and Itâ€™s and 15â€ 16:10", "Mixed: Café and It’s and 15” 16:10"),
+    ("Plain name", "Plain name"),
+    ("broken \ufffd name", None),
+])
+def test_fix_mojibake(raw, fixed):
+    assert planner.fix_mojibake(raw) == fixed
+
+
+def test_clean_repairs_without_touching_original():
+    original = p("a", "Laptop 15â€ 16:10")
+    out = planner.clean([original, p("b", "bad \ufffd")])
+    assert [x["product_name"] for x in out] == ["Laptop 15” 16:10"]
+    assert original["product_name"] == "Laptop 15â€ 16:10"

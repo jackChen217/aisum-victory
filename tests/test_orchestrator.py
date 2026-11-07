@@ -23,8 +23,9 @@ CANDS = {"monitor": [p("M1", 300), p("M2", 150)], "mouse": [p("m1", 50), p("m2",
 def fakes(monkeypatch):
     calls = {"plan_slots": [], "find": [], "llm": [], "categories": 0}
 
-    async def plan_slots(image_url, scenario, notes="", budget=None):
+    async def plan_slots(image_url, scenario, notes="", budget=None, gender=None):
         calls["plan_slots"].append((image_url, scenario, notes, budget))
+        calls["gender"] = gender
         return [dict(s, image_url=image_url, boxes=[[0, 0, 1, 1]]) for s in SLOTS]
 
     async def find_candidates(slots, budget, report=None):
@@ -178,3 +179,48 @@ def test_explanation_still_inventing_falls_back(client, monkeypatch):
     r = client.post("/api/plan", json={"image_url": "https://x", "scenario": "desk",
                                        "budget": 350}).json()
     assert r["explanation"] == "2 items picked for $350.00 of your $350 budget."
+
+
+def test_gender_reaches_outfit_planning_only(client, fakes):
+    client.post("/api/plan", json={"image_url": "https://x", "scenario": "outfit",
+                                   "budget": 150, "gender": "M"})
+    assert fakes["gender"] == "M"
+    client.post("/api/plan", json={"image_url": "https://x", "scenario": "desk",
+                                   "budget": 150, "gender": "M"})
+    assert fakes["gender"] is None  # ignored outside outfit
+    r = client.post("/api/plan", json={"image_url": "https://x", "scenario": "outfit",
+                                       "budget": 150, "gender": "X"})
+    assert r.status_code == 422
+
+
+# ── Lookboard image proxy ────────────────────────────────────────────────
+
+def test_lookboard_image_uses_session_urls_only(client, monkeypatch):
+    fetched = []
+
+    async def fake_fetch(url):
+        fetched.append(url)
+        return b"\x89PNG...", "image/png"
+
+    monkeypatch.setattr(main.image_proxy, "fetch", fake_fetch)
+    sid = client.post("/api/plan", json={"image_url": "https://x/photo.jpg", "scenario": "desk",
+                                         "budget": 350}).json()["session_id"]
+    r = client.get("/api/lookboard-image", params={"session_id": sid, "slot": "monitor"})
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png"
+    r = client.get("/api/lookboard-image", params={"session_id": sid, "slot": "_photo"})
+    assert r.status_code == 200
+    assert fetched == ["https://img/M1.jpg", "https://x/photo.jpg"]
+    assert client.get("/api/lookboard-image",
+                      params={"session_id": sid, "slot": "chair"}).status_code == 404
+    main.app.dependency_overrides[require_user] = lambda: "user-b"
+    assert client.get("/api/lookboard-image",
+                      params={"session_id": sid, "slot": "monitor"}).status_code == 404
+
+
+@pytest.mark.parametrize("url", ["http://example.com/a.jpg", "https://127.0.0.1/a.jpg",
+                                 "https://169.254.169.254/latest", "https://localhost/a.png",
+                                 "https://10.0.0.5/x.jpg"])
+def test_proxy_refuses_non_public_urls(url):
+    import asyncio
+    with pytest.raises(main.image_proxy.ImageFetchError):
+        asyncio.run(main.image_proxy.fetch(url))

@@ -109,23 +109,24 @@ async def _client() -> McpClient:
 
 async def search_text(query: str, *, domain: str | list[str] | None = None,
                       min_price: float | None = None, max_price: float | None = None,
-                      top_k: int = 10) -> dict:
+                      gender: str | None = None, top_k: int = 10) -> dict:
     """search_products_by_text -> {"results": [...], "applied_filters", "ignored_filters"}.
 
     RATE_LIMITED: retried once after a short `retry_after_s`; otherwise raised (McpError).
     """
     args = {"query": query, "domain": domain, "min_price": min_price,
-            "max_price": max_price, "top_k": top_k}
+            "max_price": max_price, "gender": gender, "top_k": top_k}
     mcp = await _client()
     return await mcp.call_waiting_once("search_products_by_text",
                                        {k: v for k, v in args.items() if v is not None})
 
 
 async def search_image(image_url: str, *, min_price: float | None = None,
-                       max_price: float | None = None, top_k: int = 15) -> dict:
+                       max_price: float | None = None, gender: str | None = None,
+                       top_k: int = 15) -> dict:
     """search_products_by_image -> {"detections": [...], "note"?, "ignored_filters", ...}."""
     args = {"image_url": image_url, "min_price": min_price, "max_price": max_price,
-            "top_k": top_k}
+            "gender": gender, "top_k": top_k}
     mcp = await _client()
     return await mcp.call_waiting_once("search_products_by_image",
                                        {k: v for k, v in args.items() if v is not None})
@@ -144,14 +145,24 @@ class PlanError(RuntimeError):
     pass
 
 
+GENDERS = {"F", "M", "KIDS", "UNISEX"}
+
+
 async def plan_slots(image_url: str, scenario: str, notes: str = "",
-                     budget: float | None = None) -> list[dict]:
+                     budget: float | None = None, gender: str | None = None) -> list[dict]:
     """`budget` caps image-search prices (outfit); desk / renter ignore it here and
-    apply it in find_candidates."""
+    apply it in find_candidates.
+
+    `gender` (F / M / KIDS / UNISEX) only when the USER chose it — never inferred: many
+    products carry no gender, so a guessed filter silently removes correct results.
+    Used by outfit only; it is passed to image search and kept on each slot so the
+    follow-up text searches use it too."""
     if scenario not in SCENARIOS:
         raise ValueError(f"unknown scenario {scenario!r}; one of {', '.join(SCENARIOS)}")
+    if gender is not None and gender not in GENDERS:
+        raise ValueError(f"gender must be one of {', '.join(sorted(GENDERS))} or None")
     if scenario == "outfit":
-        return await _outfit_slots(image_url, budget)
+        return await _outfit_slots(image_url, budget, gender)
     return await _llm_slots(image_url, scenario, notes)
 
 
@@ -227,8 +238,9 @@ def _parse_slots(content: str, default_domain: list[str]) -> list[dict]:
     return slots
 
 
-async def _outfit_slots(image_url: str, budget: float | None = None) -> list[dict]:
-    res = await search_image(image_url, max_price=budget)
+async def _outfit_slots(image_url: str, budget: float | None = None,
+                        gender: str | None = None) -> list[dict]:
+    res = await search_image(image_url, max_price=budget, gender=gender)
     detections = res.get("detections") or []
     if not detections:
         raise PlanError(res.get("note") or "No fashion items were detected in the photo.")
@@ -255,6 +267,8 @@ async def _outfit_slots(image_url: str, budget: float | None = None) -> list[dic
                 "domain": list(SCENARIOS["outfit"]["domain"]),
                 "candidates": g["products"], "source": "image_search",
                 "image_url": image_url, "item": g["item"], "boxes": g["boxes"]}
+        if gender:
+            slot["gender"] = gender
         if res.get("ignored_filters"):
             slot["ignored_filters"] = res["ignored_filters"]
         slots.append(slot)
@@ -263,9 +277,44 @@ async def _outfit_slots(image_url: str, budget: float | None = None) -> list[dic
 
 # ── find_candidates ──────────────────────────────────────────────────────
 
-# Mojibake: UTF-8 decoded as cp1252/latin-1 ("15â€ 16:10"), or a replacement char.
-_GARBLED = re.compile("â€|â„|Ã.|Â|�")
+# Mojibake: UTF-8 bytes shown as cp1252 ("15â€ 16:10") or as latin-1, where the
+# continuation bytes become invisible C1 control characters ("Multiâ\x80\x91Pocket").
+_GARBLED = re.compile("â€|â„|Ã.|Â|â[\x80-\x9f]|�")
 _NEAR_DUP = 0.9
+
+# A run that starts like a UTF-8 lead byte and continues like continuation bytes, in
+# either the cp1252 or the latin-1 reading.
+_CP1252_HIGH = "€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ"
+_RUN = re.compile("[Â-ô][\u0080-¿" + _CP1252_HIGH + "]+")
+
+# Sequences that lost a byte and cannot be decoded, longest first.
+_MOJIBAKE = [("â€\x9d", "”"), ("Â ", " "), ("Â", ""), ("â€", "”")]
+
+
+def _as_byte(ch: str) -> bytes:
+    try:
+        return ch.encode("cp1252")
+    except UnicodeEncodeError:
+        return ch.encode("latin-1")  # C1 controls \x80-\x9f, which cp1252 lacks
+
+
+def _decode_run(m: re.Match) -> str:
+    try:
+        return b"".join(_as_byte(c) for c in m.group(0)).decode("utf-8")
+    except UnicodeError:
+        return m.group(0)
+
+
+def fix_mojibake(name: str) -> str | None:
+    """The name with mojibake repaired, the name itself when it has none, or None when
+    it cannot be repaired (the caller drops that product)."""
+    if not _GARBLED.search(name):
+        return name
+    fixed = _RUN.sub(_decode_run, name)
+    for bad, good in _MOJIBAKE:
+        fixed = fixed.replace(bad, good)
+    fixed = " ".join(fixed.split())
+    return None if _GARBLED.search(fixed) else fixed
 
 
 def _norm(name: str) -> str:
@@ -273,13 +322,20 @@ def _norm(name: str) -> str:
 
 
 def clean(products: list[dict]) -> list[dict]:
-    """Keep order; drop repeated p_keys, garbled names, and names nearly identical to
-    one already kept (the first, i.e. best-ranked, wins)."""
+    """Keep order; drop repeated p_keys and names nearly identical to one already kept
+    (the first, i.e. best-ranked, wins). Mojibake names are repaired (the product is
+    copied, never edited in place); one that cannot be repaired is dropped."""
     out, keys, names = [], set(), []
     for p in products:
         key, name = p.get("p_key"), p.get("product_name") or ""
-        if (key and key in keys) or _GARBLED.search(name):
+        if key and key in keys:
             continue
+        fixed = fix_mojibake(name)
+        if fixed is None:
+            continue
+        if fixed != name:
+            p = {**p, "product_name": fixed}
+            name = fixed
         n = _norm(name)
         if any(difflib.SequenceMatcher(None, n, m).ratio() >= _NEAR_DUP for m in names):
             continue
@@ -357,16 +413,16 @@ async def find_candidates(slots: list[dict], budget: float,
     def note(slot: dict, key: str, value) -> None:
         report.setdefault(slot["slot"], {})[key] = value
 
-    async def text(query: str, domain) -> dict:
+    async def text(query: str, domain, gender=None) -> dict:
         async with gate:
             return await search_text(query, domain=domain or None, max_price=budget,
-                                     top_k=TEXT_TOP_K)
+                                     gender=gender, top_k=TEXT_TOP_K)
 
     async def one(slot: dict) -> list[dict]:
         if slot.get("ignored_filters"):
             note(slot, "ignored_filters", slot["ignored_filters"])
         if not slot.get("candidates") and not slot.get("image_url"):
-            res = await text(slot["query"], slot.get("domain"))
+            res = await text(slot["query"], slot.get("domain"), slot.get("gender"))
             if res.get("ignored_filters"):
                 note(slot, "ignored_filters", res["ignored_filters"])
             return clean(res.get("results") or [])
@@ -377,7 +433,7 @@ async def find_candidates(slots: list[dict], budget: float,
             return products
         try:
             query = await _refine_query(slot)
-            res = await text(query, ["fashion"])
+            res = await text(query, ["fashion"], slot.get("gender"))
         except (LlmError, httpx.HTTPError, McpError) as e:
             note(slot, "refine_error", f"{type(e).__name__}: {e}")
             log.warning("find_candidates: refining %s failed: %s", slot["slot"], e)
@@ -404,60 +460,66 @@ async def find_candidates(slots: list[dict], budget: float,
 # ── category check ───────────────────────────────────────────────────────
 
 _CATEGORY_PROMPT = (
-    "You check shopping search results. For each slot below, decide which candidates "
-    "are NOT the kind of product the slot asks for, judging only from the product name. "
-    "Reject a candidate only when its name clearly shows a different product type: a "
-    "mouse pad in a 'desk' slot, replacement speaker parts in a 'speaker' slot, a phone "
-    "case in a 'monitor' slot. Do not reject for colour, style, price or brand, and keep "
+    "You check shopping search results for ONE slot of a shopping list. Decide which "
+    "candidates are NOT the kind of product the slot asks for, judging only from the "
+    "product name. Reject a candidate only when its name clearly shows a different "
+    "product type: a mouse pad for 'desk', replacement speaker parts for 'speaker', "
+    "keycaps for 'keyboard'. Do not reject for colour, style, price or brand, and keep "
     "anything you are unsure about.\n"
-    'Reply with ONLY a JSON object mapping slot to the list of rejected ids, e.g. '
-    '{"desk": [3, 7], "speaker": []}. Include every slot.\n\nSLOTS:\n'
+    'Reply with ONLY a JSON object: {"reject": [ids]}, e.g. {"reject": [3, 7]} or '
+    '{"reject": []}.\n\nSLOT:\n'
 )
 _CATEGORY_NAME_CHARS = 90
+MAX_CONCURRENT_CHECKS = 4
 
 
 async def check_categories(slots: list[dict], candidates: dict[str, list[dict]],
                            report: dict | None = None) -> dict[str, list[dict]]:
-    """One DeepSeek call for all slots: drop candidates that are the wrong product type.
+    """Drop candidates that are the wrong product type: one DeepSeek call per slot,
+    at most MAX_CONCURRENT_CHECKS at once.
 
-    Returns new candidate lists; order is kept. Any failure — the call, or a reply that
-    does not parse — returns `candidates` unchanged and notes it in
-    report["_category_check"]. Rejections are listed per slot in
-    report[slot]["category_rejected"] (product names).
+    Returns new candidate lists; order is kept. A slot whose call fails, or whose reply
+    does not parse, keeps its candidates (report[slot]["category_error"]). Rejections
+    are listed in report[slot]["category_rejected"] (product names), and
+    report["_category_check"] = {"rejected": n, "failed": [slots]}.
     """
     report = report if report is not None else {}
-    listing = {}
-    for s in slots:
-        items = candidates.get(s["slot"]) or []
-        if items:
-            listing[s["slot"]] = {
-                "looking_for": s.get("query") or s["slot"],
-                "candidates": [{"id": i, "name": (p.get("product_name") or "")[:_CATEGORY_NAME_CHARS]}
-                               for i, p in enumerate(items)]}
-    if not listing:
-        return candidates
-    try:
-        reply = await llm_client.chat([{"role": "user", "content":
-                                        _CATEGORY_PROMPT + json.dumps(listing, ensure_ascii=False)}])
-        rejected = _parse_rejections(reply["message"].get("content") or "", listing)
-    except (LlmError, httpx.HTTPError, ValueError) as e:
-        report["_category_check"] = {"error": f"{type(e).__name__}: {e}"}
-        log.warning("check_categories failed, keeping all candidates: %s", e)
-        return candidates
+    gate = asyncio.Semaphore(MAX_CONCURRENT_CHECKS)
 
-    out = dict(candidates)
-    for slot, ids in rejected.items():
-        if not ids:
+    async def one(slot: dict) -> set[int]:
+        items = candidates.get(slot["slot"]) or []
+        listing = {"slot": slot["slot"], "looking_for": slot.get("query") or slot["slot"],
+                   "candidates": [{"id": i, "name": (p.get("product_name") or "")[:_CATEGORY_NAME_CHARS]}
+                                  for i, p in enumerate(items)]}
+        async with gate:
+            reply = await llm_client.chat([{"role": "user", "content":
+                                            _CATEGORY_PROMPT + json.dumps(listing, ensure_ascii=False)}])
+        return _parse_rejections(reply["message"].get("content") or "", len(items))
+
+    todo = [s for s in slots if candidates.get(s["slot"])]
+    results = await asyncio.gather(*(one(s) for s in todo), return_exceptions=True)
+    out, total, failed = dict(candidates), 0, []
+    for slot, res in zip(todo, results):
+        name = slot["slot"]
+        if isinstance(res, BaseException):
+            if not isinstance(res, (LlmError, httpx.HTTPError, ValueError)):
+                raise res
+            failed.append(name)
+            report.setdefault(name, {})["category_error"] = f"{type(res).__name__}: {res}"
+            log.warning("check_categories: %s kept as is: %s", name, res)
             continue
-        items = candidates[slot]
-        out[slot] = [p for i, p in enumerate(items) if i not in ids]
-        report.setdefault(slot, {})["category_rejected"] = [
-            items[i].get("product_name") for i in sorted(ids)]
-    report["_category_check"] = {"rejected": sum(len(v) for v in rejected.values())}
+        if res:
+            items = candidates[name]
+            out[name] = [p for i, p in enumerate(items) if i not in res]
+            report.setdefault(name, {})["category_rejected"] = [
+                items[i].get("product_name") for i in sorted(res)]
+            total += len(res)
+    report["_category_check"] = {"rejected": total, "failed": failed}
     return out
 
 
-def _parse_rejections(content: str, listing: dict) -> dict[str, set[int]]:
+def _parse_rejections(content: str, n: int) -> set[int]:
+    """Ids to reject from {"reject": [ids]}; ids outside 0..n-1 or not ints are ignored."""
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip())
     start, end = text.find("{"), text.rfind("}")
     if start < 0 or end <= start:
@@ -466,13 +528,7 @@ def _parse_rejections(content: str, listing: dict) -> dict[str, set[int]]:
         data = json.loads(text[start:end + 1])
     except json.JSONDecodeError as e:
         raise ValueError(f"invalid JSON ({e})") from None
-    if not isinstance(data, dict):
-        raise ValueError("the JSON is not an object")
-    out = {}
-    for slot, ids in data.items():
-        if slot not in listing or not isinstance(ids, list):
-            continue  # unknown slot or odd value: ignore, keep that slot as is
-        n = len(listing[slot]["candidates"])
-        out[slot] = {i for i in ids if isinstance(i, int) and not isinstance(i, bool)
-                     and 0 <= i < n}
-    return out
+    ids = data.get("reject") if isinstance(data, dict) else None
+    if not isinstance(ids, list):
+        raise ValueError('the reply has no "reject" list')
+    return {i for i in ids if isinstance(i, int) and not isinstance(i, bool) and 0 <= i < n}

@@ -66,9 +66,13 @@ class SessionNotFound(KeyError):
 # ── public API ───────────────────────────────────────────────────────────
 
 async def plan(uid: str, image_url: str, scenario: str, budget: float,
-               owned: list[str] | None = None, notes: str = "") -> dict:
+               owned: list[str] | None = None, notes: str = "",
+               gender: str | None = None) -> dict:
+    """`gender` is the user's own choice (F / M), used for outfit only."""
     owned = list(owned or [])
-    slots = await planner.plan_slots(image_url, scenario, notes, budget=budget)
+    gender = gender if scenario == "outfit" else None
+    slots = await planner.plan_slots(image_url, scenario, notes, budget=budget,
+                                     gender=gender)
     report: dict = {}
     candidates = await planner.find_candidates(slots, budget, report=report)
     candidates = await planner.check_categories(slots, candidates, report=report)
@@ -78,7 +82,7 @@ async def plan(uid: str, image_url: str, scenario: str, budget: float,
 
     session_id = uuid.uuid4().hex
     _save(uid, session_id, {
-        "scenario": scenario, "image_url": image_url, "notes": notes,
+        "scenario": scenario, "image_url": image_url, "notes": notes, "gender": gender,
         "search_budget": budget, "budget": budget, "owned": owned,
         "slots": slots, "candidates": candidates, "plan": result["plan"],
     })
@@ -121,6 +125,20 @@ async def replan(uid: str, session_id: str, budget: float,
         out["note"] = (f"Candidates were searched up to ${s['search_budget']:g}; "
                        "a new plan is needed to look at pricier items.")
     return out
+
+
+def image_url_for(uid: str, session_id: str, slot: str) -> str:
+    """The URL of the session's photo (slot "_photo") or of the product currently
+    planned for `slot`. Only URLs already in this user's session can be looked up."""
+    s = SESSIONS.get((uid, session_id))
+    if s is None:
+        raise SessionNotFound(session_id)
+    if slot == "_photo":
+        return s["image_url"]
+    product = s["plan"].get(slot)
+    if not product or not product.get("img_url"):
+        raise KeyError(slot)
+    return product["img_url"]
 
 
 # ── sessions ─────────────────────────────────────────────────────────────

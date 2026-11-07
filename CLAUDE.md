@@ -66,13 +66,16 @@
   - outfit：`search_products_by_image`（带 `max_price` = 预算），item 和 item_detail 都相同的 detection（比如左右鞋）合并成一个 slot。
   - 每个 slot 用 `search_products_by_text` 并发搜候选（max_price = 预算，top_k = 15），清洗：按 p_key 去重、名字近似重复只留第一个、去掉乱码名字。
   - 自我纠错：服饰 slot 候选少于 5 个或第一名 score 低于 0.45 时，让 DeepSeek 看图写更精确的描述，再用文字搜索（domain = fashion）补搜。
-  - 类别检查：一次 DeepSeek 调用（所有 slot 合在一起）去掉类别不对的候选（比如 keyboard 里的键帽、speaker 里的替换喇叭）；调用失败就全部保留。
+  - 类别检查：每个 slot 一次 DeepSeek 调用，最多 4 个并行，去掉类别不对的候选（比如 keyboard 里的键帽、speaker 里的替换喇叭）；某个 slot 失败就保留它的原候选。
+  - 性别：outfit 可以传用户自己选的 `gender`（F / M），用于图片搜索和之后的文字搜索；不选就是 Any，绝不自己推断。
+  - 乱码：商品名里的 mojibake（`â€`、`Ã©`、`â\x80\x91` 等）先修复成正常字符，修不好的商品才去掉。
   - AISUM 调用目前是 `planner.py` 里的薄适配函数（`search_text`、`search_image`，返回原始 dict），标了 `TODO: 换成 Yining 的 search.py`。
 - `src/agent/orchestrator.py`：会话存在内存（按 uid + session_id，每人最多 20 个，重启或换 Cloud Run 实例会丢）；`plan` 和 `replan`（只重新优化，不重新搜索）；每次一次 DeepSeek 调用写解释，只能用商品名里实际有的词，出现商品名里没有的颜色、材质、图案词就重试一次，还不行就换成固定的一句话。
 - `src/main.py`：`POST /api/plan`、`POST /api/replan`（都要登录），`GET /ghostcart`。
-- `static/ghostcart.html`（`/ghostcart`）：测试页面，有场景选择（desk / outfit）、图片链接、预算、三个示例按钮、商品卡片、总价和解释、预算滑块和换货标记（Swapped / Added / Removed）。
+- `static/ghostcart.html`（`/ghostcart`）：测试页面，有场景选择（desk / outfit）、outfit 的性别选项（Any / Women / Men）、图片上传和链接、预算、三个示例按钮、商品卡片、总价和解释、预算滑块和换货标记（Swapped / Added / Removed）。
+- Lookboard（只在 outfit）：结果区上方，左边原图，右边按穿着位置排列（帽子/配饰 → 外套/上衣 → 裤子/裙子 → 鞋，包在旁边），下面是总价和预算；改预算会跟着更新。"Download image" 用 canvas 导出 1200×900 PNG，商品图通过 `GET /api/lookboard-image?session_id=&slot=` 代理（只能取自己会话里的图，只允许 https 公网地址、不跟随跳转）。
 - 图片上传：`POST /api/upload`（要登录），请求体是 JPG/PNG 原始字节（最大 8 MB，按文件头判断类型），存到 bucket `aisum-hackathon-juliet-uploads`（us-central1、uniform access、allUsers 可读、1 天自动删除）的 `uploads/<随机名>`，返回 `https://storage.googleapis.com/...` 公开链接；用 google-cloud-storage + ADC。页面上有上传按钮、拖拽和 ⌘V 粘贴，上传后自动填链接并显示预览。部署到 Cloud Run 时服务账号要有这个 bucket 的 objectCreator 权限，环境变量加 `UPLOAD_BUCKET`。
-- 测试：`.venv/bin/python -m pytest`，81 个用例，全部离线。
+- 测试：`.venv/bin/python -m pytest`，100 个用例，全部离线。
 
 实测（Python 直接调 orchestrator）：
 - 电竞桌面 $350：7–8 件，第一次出方案约 50 秒（类别检查那次 DeepSeek 调用约 35 秒）；预算改成 $250 后重新规划约 6 秒。
@@ -92,7 +95,7 @@
 - 正式前端页面
 - pitch deck 和拉用户计划
 - 已知问题：
-  - 出方案太慢（约 50 秒），主要是类别检查；可以拆成每个 slot 一次并发调用。
+  - 出方案仍要约 30 秒（outfit 实测 29–36 秒）：类别检查 14–20 秒（5 个 slot 要分两轮）、解释约 8 秒。
   - 场景匹配的 score 全在 0.97 以上，不能用来排序。
   - 文字搜索偶尔把不相关或不合适的商品排得靠前（比如单手键盘）。
   - 服饰的颜色和图案描述不准（千鸟格围巾被说成 black scarf），且 score 过了 0.45 不会触发纠错。

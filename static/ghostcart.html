@@ -58,6 +58,29 @@
   .was { font-size: 12px; color: var(--soft); text-decoration: line-through; }
   .left-out { font-size: 14px; color: var(--muted); margin: 12px 0 0; padding-left: 18px; }
   .left-out .removed { color: var(--accent); }
+
+  /* Lookboard: photo on the left, the picked items top to toe on the right. */
+  .lb-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .lb-head h2 { margin: 0; font-size: 18px; }
+  .lb { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px;
+        margin-top: 12px; }
+  .lb.has-side { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, .45fr); }
+  .lb-photo { background: var(--bg); border-radius: 10px; overflow: hidden;
+              display: flex; align-items: center; justify-content: center; min-height: 240px; }
+  .lb-photo img { width: 100%; max-height: 560px; object-fit: contain; }
+  .lb-items, .lb-side { display: grid; gap: 10px; align-content: start; }
+  .lb-row { display: flex; gap: 10px; justify-content: center; }
+  .lb-item { flex: 1 1 0; max-width: 180px; text-align: center; font-size: 12px;
+             color: var(--muted); text-decoration: none; position: relative; }
+  .lb-item img { width: 100%; aspect-ratio: 1; object-fit: contain; background: #fff;
+                 border: 1px solid var(--border); border-radius: 8px; }
+  .lb-item.changed img { border: 2px solid var(--accent); }
+  .lb-item .price { display: block; font-weight: 700; color: var(--text); }
+  .lb-total { margin-top: 12px; font-size: 20px; font-weight: 700; }
+  .lb-total span { font-size: 14px; font-weight: 400; color: var(--muted); }
+  @media (max-width: 640px) {
+    .lb, .lb.has-side { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body class="gated">
@@ -107,6 +130,13 @@
           <label>Budget (USD)
             <input type="number" id="budget" min="1" step="1" value="350" required>
           </label>
+          <label id="gender-wrap" hidden>Shopping for
+            <select id="gender">
+              <option value="">Any</option>
+              <option value="F">Women</option>
+              <option value="M">Men</option>
+            </select>
+          </label>
         </div>
         <div id="drop" class="drop">
           <img id="preview" alt="" hidden>
@@ -129,6 +159,19 @@
         <div><button id="go" class="primary" type="submit">Generate plan</button></div>
       </form>
       <p id="status"></p>
+    </section>
+
+    <section id="lookboard" class="card" hidden>
+      <div class="lb-head">
+        <h2>Lookboard</h2>
+        <button type="button" id="lb-download">Download image</button>
+      </div>
+      <div class="lb" id="lb">
+        <div class="lb-photo"><img id="lb-photo" alt="Your photo"></div>
+        <div class="lb-items" id="lb-items"></div>
+        <div class="lb-side" id="lb-side" hidden></div>
+      </div>
+      <div class="lb-total"><strong id="lb-total-val"></strong> <span id="lb-of"></span></div>
     </section>
 
     <section id="result" class="card" hidden>
@@ -172,7 +215,7 @@ const EXAMPLES = {
 };
 const REASONS = { over_budget: 'over budget', owned: 'you own it', no_candidates: 'nothing found' };
 
-let session = null;   // { id, budget, plan }
+let session = null;   // { id, budget, plan, scenario, image }
 let replanSeq = 0;    // drop replies to slider moves that were overtaken
 
 function setStatus(text, state = '') { $('status').textContent = text; $('status').dataset.state = state; }
@@ -217,6 +260,7 @@ function card(slot, p, change, before) {
 
 function render(data, changes = null, previous = {}) {
   $('result').hidden = false; $('products').hidden = false;
+  renderLookboard(data, changes);
   $('total').textContent = money(data.total);
   $('of-budget').textContent = `of ${money(session.budget)} budget`;
   $('explanation').textContent = data.explanation || '';
@@ -254,13 +298,15 @@ function setupSlider(budget) {
 $('plan-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const budget = Number($('budget').value);
-  const body = { image_url: $('image-url').value.trim(), scenario: $('scenario').value, budget };
+  const scenario = $('scenario').value;
+  const body = { image_url: $('image-url').value.trim(), scenario, budget,
+                 gender: scenario === 'outfit' ? ($('gender').value || null) : null };
   $('go').disabled = true;
   setStatus('Reading the photo, searching and checking products… this takes up to a minute.');
   const t0 = performance.now();
   try {
     const data = await api('/api/plan', body);
-    session = { id: data.session_id, budget, plan: data.plan };
+    session = { id: data.session_id, budget, plan: data.plan, scenario, image: body.image_url };
     setupSlider(budget);
     render(data);
     setStatus(`Done in ${((performance.now() - t0) / 1000).toFixed(1)}s · ${data.slots.length} items looked for.`);
@@ -294,6 +340,7 @@ for (const b of document.querySelectorAll('[data-example]')) {
   b.addEventListener('click', () => {
     const ex = EXAMPLES[b.dataset.example];
     $('scenario').value = ex.scenario; $('budget').value = ex.budget; setImage(ex.url);
+    showGender();
   });
 }
 
@@ -348,6 +395,152 @@ document.addEventListener('paste', (e) => {
   e.preventDefault();
   uploadFile(item.getAsFile());
 });
+
+// ── Gender (outfit only; the user's own choice, never guessed) ─────────
+function showGender() { $('gender-wrap').hidden = $('scenario').value !== 'outfit'; }
+$('scenario').addEventListener('change', showGender);
+showGender();
+
+// ── Lookboard ─────────────────────────────────────────────────────────
+// Where each slot sits on the board, top to toe. Checked in this order; anything
+// unmatched counts as an accessory and goes in the top row.
+const ZONES = [
+  ['side', /bag|tote|purse|backpack|clutch|wallet/],
+  ['feet', /shoe|sneaker|boot|heel|sandal|loafer|flat|slipper|mule|clog/],
+  ['bottom', /pant|jean|trouser|skirt|short|legging|jogger/],
+  ['top', /coat|jacket|blazer|cardigan|sweater|hoodie|shirt|top|blouse|tee|vest|dress|jumpsuit|parka|outer/],
+  ['head', /hat|cap|beanie|beret|fedora|glass|earring|necklace|scarf|tie|jewel|watch|bracelet|belt/],
+];
+const ROWS = ['head', 'top', 'bottom', 'feet'];
+const zoneOf = (slot) => (ZONES.find(([, re]) => re.test(slot)) || ['head'])[0];
+
+function boardLayout(plan) {
+  const zones = { head: [], top: [], bottom: [], feet: [], side: [] };
+  for (const [slot, p] of Object.entries(plan)) zones[zoneOf(slot)].push([slot, p]);
+  return zones;
+}
+
+function lbItem(slot, p, changed) {
+  const a = document.createElement('a');
+  a.className = 'lb-item' + (changed ? ' changed' : '');
+  if (/^https?:\/\//.test(p.click_url || '')) { a.href = p.click_url; a.target = '_blank'; a.rel = 'noopener'; }
+  const img = document.createElement('img'); img.alt = label(slot); img.loading = 'lazy';
+  if (p.img_url) img.src = p.img_url;
+  const t = document.createElement('span'); t.textContent = label(slot);
+  const pr = document.createElement('span'); pr.className = 'price'; pr.textContent = money(p.product_price);
+  a.append(img, t, pr);
+  return a;
+}
+
+function renderLookboard(data, changes) {
+  const on = session?.scenario === 'outfit';
+  $('lookboard').hidden = !on;
+  if (!on) return;
+  if ($('lb-photo').src !== session.image) $('lb-photo').src = session.image;
+  const zones = boardLayout(data.plan);
+  const isChanged = (slot) => ['replaced', 'added'].includes(changes?.[slot]);
+  const items = $('lb-items'); items.replaceChildren();
+  for (const z of ROWS) {
+    if (!zones[z].length) continue;
+    const row = document.createElement('div'); row.className = 'lb-row';
+    for (const [slot, p] of zones[z]) row.append(lbItem(slot, p, isChanged(slot)));
+    items.append(row);
+  }
+  const side = $('lb-side'); side.replaceChildren();
+  for (const [slot, p] of zones.side) side.append(lbItem(slot, p, isChanged(slot)));
+  side.hidden = !zones.side.length;
+  $('lb').classList.toggle('has-side', zones.side.length > 0);
+  $('lb-total-val').textContent = money(data.total);
+  $('lb-of').textContent = `of ${money(session.budget)} budget`;
+}
+
+// Product images send no CORS headers, so drawing them directly would taint the canvas.
+// They come through /api/lookboard-image, which only serves this session's own images.
+async function boardImage(slot) {
+  const token = await window.__auth?.token();
+  const r = await fetch(`/api/lookboard-image?session_id=${encodeURIComponent(session.id)}`
+                        + `&slot=${encodeURIComponent(slot)}`,
+                        { headers: { Authorization: `Bearer ${token}` } });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+  return createImageBitmap(await r.blob());
+}
+
+function drawContain(ctx, img, x, y, w, h) {
+  const k = Math.min(w / img.width, h / img.height);
+  const dw = img.width * k, dh = img.height * k;
+  ctx.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+}
+
+async function downloadBoard() {
+  if (!session) return;
+  const btn = $('lb-download'); btn.disabled = true;
+  setStatus('Building the Lookboard image…');
+  try {
+    const W = 1200, H = 900, PAD = 40, TOP = 90, BOTTOM = 90;
+    const zones = boardLayout(session.plan);
+    const rows = ROWS.filter((z) => zones[z].length);
+    const hasSide = zones.side.length > 0;
+    const photoW = 520, itemsX = PAD + photoW + 30;
+    const itemsW = (hasSide ? W - 200 - PAD : W - PAD) - itemsX;
+    const slots = ['_photo', ...Object.keys(session.plan)];
+    const imgs = Object.fromEntries(await Promise.all(slots.map(async (s) => {
+      try { return [s, await boardImage(s)]; } catch { return [s, null]; }   // a missing image leaves a blank tile
+    })));
+
+    const c = Object.assign(document.createElement('canvas'), { width: W, height: H });
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#FAFAF9'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#1C1917'; ctx.font = '700 34px system-ui, sans-serif';
+    ctx.fillText('GhostCart Lookboard', PAD, 58);
+
+    const areaH = H - TOP - BOTTOM;
+    ctx.fillStyle = '#F0EFEE'; ctx.fillRect(PAD, TOP, photoW, areaH);
+    if (imgs._photo) drawContain(ctx, imgs._photo, PAD, TOP, photoW, areaH);
+
+    const tile = (slot, p, x, y, w, h) => {
+      const ih = h - 40;
+      ctx.fillStyle = '#FFFFFF'; ctx.fillRect(x, y, w, ih);
+      ctx.strokeStyle = '#E7E5E4'; ctx.lineWidth = 2; ctx.strokeRect(x, y, w, ih);
+      if (imgs[slot]) drawContain(ctx, imgs[slot], x + 6, y + 6, w - 12, ih - 12);
+      ctx.fillStyle = '#57534E'; ctx.font = '15px system-ui, sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(label(slot), x + w / 2, y + ih + 17);
+      ctx.fillStyle = '#1C1917'; ctx.font = '700 16px system-ui, sans-serif';
+      ctx.fillText(money(p.product_price), x + w / 2, y + ih + 36);
+      ctx.textAlign = 'left';
+    };
+    const rowH = rows.length ? areaH / rows.length : 0;
+    rows.forEach((z, r) => {
+      const n = zones[z].length, gap = 14;
+      const w = Math.min((itemsW - gap * (n - 1)) / n, rowH - 50);
+      const start = itemsX + (itemsW - (w * n + gap * (n - 1))) / 2;
+      zones[z].forEach(([slot, p], i) => tile(slot, p, start + i * (w + gap), TOP + r * rowH + 5, w, rowH - 10));
+    });
+    if (hasSide) {
+      const n = zones.side.length, h = Math.min(areaH / n, 220);
+      zones.side.forEach(([slot, p], i) => tile(slot, p, W - PAD - 170, TOP + i * h, 170, h - 10));
+    }
+    ctx.fillStyle = '#1C1917'; ctx.font = '700 32px system-ui, sans-serif';
+    const total = money(Object.values(session.plan).reduce((t, p) => t + Number(p.product_price || 0), 0));
+    ctx.fillText(total, PAD, H - 36);
+    const tw = ctx.measureText(total).width;
+    ctx.fillStyle = '#57534E'; ctx.font = '20px system-ui, sans-serif';
+    ctx.fillText(`of ${money(session.budget)} budget`, PAD + tw + 12, H - 36);
+
+    const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
+    const a = Object.assign(document.createElement('a'),
+                            { href: URL.createObjectURL(blob), download: 'ghostcart-lookboard.png' });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    const missing = slots.filter((s) => !imgs[s]).length;
+    setStatus(missing ? `Lookboard saved; ${missing} image(s) could not be loaded and are blank.`
+                      : 'Lookboard saved as ghostcart-lookboard.png.');
+  } catch (err) {
+    setStatus(`Could not build the image: ${err.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+$('lb-download').addEventListener('click', downloadBoard);
 </script>
 </body>
 </html>

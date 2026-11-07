@@ -21,18 +21,21 @@ GhostCart (src/agent/, page at /ghostcart):
   /api/plan           photo + scenario + budget -> slots, optimized plan, explanation
   /api/replan         same session, new budget / owned -> re-optimized plan + changes
   /api/upload         JPEG/PNG bytes (max 8 MB) -> public Cloud Storage URL
+  /api/lookboard-image  a session's photo or planned product image, proxied so the
+                       page can export the Lookboard canvas as PNG
 """
 import json
 import time
 from contextlib import asynccontextmanager
+from typing import Literal
 
 import httpx
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import llm_client, uploads
+from . import image_proxy, llm_client, uploads
 from .agent import orchestrator, planner
 from .agent.orchestrator import SessionNotFound
 from .agent.planner import PlanError
@@ -303,13 +306,15 @@ class PlanRequest(BaseModel):
     budget: float = Field(gt=0, le=100_000)
     owned: list[str] = []
     notes: str = Field(default="", max_length=2000)
+    # The user's own choice; None means "Any". Applied to outfit searches only.
+    gender: Literal["F", "M"] | None = None
 
 
 @app.post("/api/plan")
 async def plan(req: PlanRequest, uid: str = Depends(require_user)):
     try:
         return await orchestrator.plan(uid, req.image_url, req.scenario, req.budget,
-                                       req.owned, req.notes)
+                                       req.owned, req.notes, req.gender)
     except PlanError as e:
         # Nothing usable in the photo (or the model never produced slots): the user's
         # input, not our outage — say what happened.
@@ -362,3 +367,26 @@ async def upload(request: Request, uid: str = Depends(require_user)):
     except Exception as e:  # storage / credentials: say which, do not leak a trace
         return JSONResponse({"error": f"Upload failed: {type(e).__name__}: {e}"[:300]},
                             status_code=502)
+
+
+# ── Lookboard image proxy ────────────────────────────────────────────────
+
+@app.get("/api/lookboard-image")
+async def lookboard_image(session_id: str, slot: str, uid: str = Depends(require_user)):
+    """Image bytes for the Lookboard PNG export. `slot` is a planned slot, or "_photo"
+    for the original photo. The URL comes from the user's own session, never the query."""
+    try:
+        url = orchestrator.image_url_for(uid, session_id, slot)
+    except SessionNotFound:
+        return JSONResponse({"error": "This plan has expired. Generate a new one."},
+                            status_code=404)
+    except KeyError:
+        return JSONResponse({"error": f"No image for slot {slot!r} in the current plan."},
+                            status_code=404)
+    try:
+        data, kind = await image_proxy.fetch(url)
+    except image_proxy.ImageFetchError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    except httpx.HTTPError as e:
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
+    return Response(data, media_type=kind, headers={"Cache-Control": "private, max-age=600"})
