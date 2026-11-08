@@ -1,21 +1,36 @@
-"""Image uploads: bytes in, a public URL that AISUM's servers and DeepSeek can fetch.
+"""Image uploads: bytes in, a URL that AISUM's servers and DeepSeek can fetch.
 
 Stored in our own Cloud Storage bucket (UPLOAD_BUCKET) under uploads/<random>.<ext>.
-The bucket is public-read (allUsers: objectViewer) and deletes objects after 1 day,
-so a URL works long enough for a plan and its re-plans and then disappears.
+The bucket is private and deletes objects after 1 day. On Cloud Run every URL handed
+out is a V4 signed GET URL valid for SIGNED_MINUTES; `fresh` signs a new one when an
+old one has run out (a re-plan an hour later, the Lookboard export).
 
-Credentials are Application Default Credentials: `gcloud auth application-default
-login` on a laptop, the service account on Cloud Run (it needs objectCreator on the
-bucket). No key file.
+Signing has no key file: it goes through the IAM signBlob API with the service
+account's access token. That account needs, on the bucket, objectCreator (to store)
+and objectViewer (a signed URL reads with the signer's rights), and tokenCreator on
+itself (to sign).
+
+A laptop's user credentials cannot sign, so local development gets the plain bucket
+URL. That URL only opens if the bucket is readable; it is never used on Cloud Run,
+where a signing failure is an error.
 """
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import re
+import threading
 import uuid
+from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs, urlsplit
+
+log = logging.getLogger(__name__)
 
 MAX_BYTES = 8 * 1024 * 1024
 PREFIX = "uploads/"
+SIGNED_MINUTES = 60
+RESIGN_MARGIN_S = 300  # a URL with less than this left counts as expired
 
 # Trust the bytes, not the Content-Type header.
 _SIGNATURES = {b"\xff\xd8\xff": ("jpg", "image/jpeg"),
@@ -53,6 +68,77 @@ def _bucket(name: str):
     return _client.bucket(name)
 
 
+def on_cloud_run() -> bool:
+    return bool(os.environ.get("K_SERVICE"))  # set by Cloud Run on every instance
+
+
+_creds = None
+_creds_lock = threading.Lock()
+
+
+def _signing_identity() -> tuple[str, str]:
+    """(service account email, access token), refreshed when the token has run out."""
+    global _creds
+    import google.auth
+    from google.auth.transport.requests import Request
+
+    with _creds_lock:
+        if _creds is None:
+            _creds, _ = google.auth.default()
+        if not _creds.valid:
+            _creds.refresh(Request())
+        return _creds.service_account_email, _creds.token
+
+
+def _signed_url(name: str, path: str) -> str:
+    email, token = _signing_identity()
+    return _bucket(name).blob(path).generate_signed_url(
+        version="v4", expiration=timedelta(minutes=SIGNED_MINUTES), method="GET",
+        service_account_email=email, access_token=token)
+
+
+def _url(name: str, path: str) -> str:
+    if on_cloud_run():
+        return _signed_url(name, path)
+    return f"https://storage.googleapis.com/{name}/{path}"
+
+
+def _expired_path(url: str) -> str | None:
+    """The object path if `url` is one of our signed URLs and has (nearly) run out.
+
+    Only URLs that are already signed qualify, so an unsigned address of a bucket
+    object can never be turned into a working link, and the name must be exactly the
+    random name `save` generates."""
+    name, parts = bucket_name(), urlsplit(url)
+    if not name or parts.hostname != "storage.googleapis.com":
+        return None
+    found = re.fullmatch(rf"/{re.escape(name)}/({PREFIX}[0-9a-f]{{32}}\.(?:jpg|png))", parts.path)
+    query = parse_qs(parts.query)
+    if not found or "X-Goog-Signature" not in query:
+        return None
+    try:
+        signed = datetime.strptime(query["X-Goog-Date"][0], "%Y%m%dT%H%M%SZ")
+        life = int(query["X-Goog-Expires"][0])
+    except (KeyError, ValueError):
+        return None
+    ends = signed.replace(tzinfo=timezone.utc) + timedelta(seconds=life)
+    left = (ends - datetime.now(timezone.utc)).total_seconds()
+    return found[1] if left < RESIGN_MARGIN_S else None
+
+
+async def fresh(url: str) -> str:
+    """`url`, or a newly signed one if it is our signed URL and has run out. Any other
+    URL comes back unchanged; if signing fails the old URL does too."""
+    path = _expired_path(url) if on_cloud_run() else None
+    if path is None:
+        return url
+    try:
+        return await asyncio.to_thread(_signed_url, bucket_name(), path)
+    except Exception as e:
+        log.warning("could not re-sign an upload URL: %s", type(e).__name__)
+        return url
+
+
 async def save(data: bytes) -> dict:
     """Validate and store one image. Returns {"url", "path", "content_type", "bytes"}."""
     name = bucket_name()
@@ -67,9 +153,10 @@ async def save(data: bytes) -> dict:
 
     def upload():
         blob = _bucket(name).blob(path)
-        blob.cache_control = "public, max-age=3600"
+        blob.cache_control = "private, max-age=3600"
         blob.upload_from_string(data, content_type=content_type)
+        return _url(name, path)
 
-    await asyncio.to_thread(upload)  # the client library is blocking
-    return {"url": f"https://storage.googleapis.com/{name}/{path}", "path": path,
+    url = await asyncio.to_thread(upload)  # the client library is blocking
+    return {"url": url, "path": path,
             "content_type": content_type, "bytes": len(data)}

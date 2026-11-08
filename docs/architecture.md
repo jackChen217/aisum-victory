@@ -190,7 +190,7 @@ flowchart LR
 
 | Use case | Route | External calls |
 | --- | --- | --- |
-| Upload image | `POST /api/upload` | Cloud Storage (public for 1 day) |
+| Upload image | `POST /api/upload` | Cloud Storage (private, signed URL 60 min, deleted after 1 day) |
 | Generate plan | `POST /api/plan` | outfit: AISUM image search (+ crop searches), Cloud Storage for crops; desk / room: DeepSeek (slots, category checks) and AISUM text search |
 | Change budget | `POST /api/replan` `{budget}` | none by default |
 | Swap in an alternative | `POST /api/replan` `{pin: {slot: p_key}}` | none by default |

@@ -21,7 +21,7 @@ import uuid
 
 import httpx
 
-from .. import llm_client
+from .. import llm_client, uploads
 from ..llm_client import LlmError
 from . import matching, outfit, planner, sizes
 from .optimizer import diff_plans, optimize
@@ -91,6 +91,7 @@ async def plan(uid: str, image_url: str, scenario: str, budget: float,
     if scenario == "outfit" and gender not in OUTFIT_GENDERS:
         raise planner.PlanError("Choose Women, Men or Unisex for an outfit.")
     owned = list(owned or [])
+    image_url = await uploads.fresh(image_url)  # the page may resend an hour-old link
     started = time.perf_counter()
     report: dict = {}
     unmatched: list[dict] = []
@@ -128,6 +129,7 @@ async def plan(uid: str, image_url: str, scenario: str, budget: float,
         "session_id": session_id,
         "scenario": scenario,
         "budget": budget,
+        "original_image": image_url,
         "slots": [_public(s) for s in slots + unmatched],
         "plan": result["plan"],
         "match": _matches(result["plan"], candidates, scores),
@@ -160,6 +162,7 @@ async def replan(uid: str, session_id: str, budget: float,
     s = SESSIONS.get((uid, session_id))
     if s is None:
         raise SessionNotFound(session_id)
+    s["image_url"] = await uploads.fresh(s["image_url"])
     owned = list(owned if owned is not None else s["owned"])
     pins = dict(s.get("pins") or {}) if pins is None else dict(pins)
     unknown = {slot: key for slot, key in pins.items()
@@ -183,6 +186,7 @@ async def replan(uid: str, session_id: str, budget: float,
     out = {
         "session_id": session_id,
         "budget": budget,
+        "original_image": s["image_url"],
         "plan": result["plan"],
         "match": _matches(result["plan"], s["candidates"], s["scores"]),
         "alternatives": alternatives,

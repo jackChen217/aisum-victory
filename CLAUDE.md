@@ -123,7 +123,7 @@ Desk / Room：DeepSeek 看图拆清单 → 文字搜索 → 每个 slot 一次 L
 - 架构图：`docs/architecture.md`（Mermaid 时序图和用例图）。
 - `static/ghostcart.html`（`/ghostcart`）：测试页面，有场景选择（desk / outfit）、outfit 的性别选项（Any / Women / Men）、图片上传和链接、预算、三个示例按钮、商品卡片、总价和解释、预算滑块和换货标记（Swapped / Added / Removed）。
 - Lookboard（只在 outfit）：结果区上方，左边原图，右边按穿着位置排列（帽子/配饰 → 外套/上衣 → 裤子/裙子 → 鞋，包在旁边），下面是总价和预算；改预算会跟着更新。"Download image" 用 canvas 导出 1200×900 PNG，商品图通过 `GET /api/lookboard-image?session_id=&slot=` 代理（只能取自己会话里的图，只允许 https 公网地址、不跟随跳转）。
-- 图片上传：`POST /api/upload`（要登录），请求体是 JPG/PNG 原始字节（最大 8 MB，按文件头判断类型），存到 bucket `aisum-hackathon-juliet-uploads`（us-central1、uniform access、allUsers 可读、1 天自动删除）的 `uploads/<随机名>`，返回 `https://storage.googleapis.com/...` 公开链接；用 google-cloud-storage + ADC。页面上有上传按钮、拖拽和 ⌘V 粘贴，上传后自动填链接并显示预览。部署到 Cloud Run 时服务账号要有这个 bucket 的 objectCreator 权限，环境变量加 `UPLOAD_BUCKET`。
+- 图片上传：`POST /api/upload`（要登录），请求体是 JPG/PNG 原始字节（最大 8 MB，按文件头判断类型），存到 bucket `aisum-hackathon-juliet-uploads`（us-central1、uniform access、**私有**、1 天自动删除）的 `uploads/<随机名>`，Cloud Run 上返回 v4 签名 GET 链接（60 分钟，IAM signBlob，无 key 文件；裁剪重搜的小图也一样；plan / replan / Lookboard 导出遇到过期链接会用 `uploads.fresh` 重签，plan / replan 多返回 `original_image`）；本地（没有 `K_SERVICE`）签不了名，退回普通 bucket 地址，而 bucket 私有后这个地址打不开，所以本地要用公开图片链接测试；用 google-cloud-storage + ADC。页面上有上传按钮、拖拽和 ⌘V 粘贴，上传后自动填链接并显示预览。部署到 Cloud Run 时服务账号要有这个 bucket 的 objectCreator 和 objectViewer 权限（签名链接按签名者的权限读），以及对自己的 `roles/iam.serviceAccountTokenCreator`，环境变量加 `UPLOAD_BUCKET`。
 - 测试：`.venv/bin/python -m pytest`，140 个用例，全部离线。
 
 实测（Python 直接调 orchestrator）：
@@ -187,7 +187,7 @@ Desk / Room：DeepSeek 看图拆清单 → 文字搜索 → 每个 slot 一次 L
 | `src/agent/optimizer.py` | Jack | 纯函数，不调外部服务，有单元测试 |
 | `src/agent/orchestrator.py` | Jack | 串起整个流程，管理会话状态，处理重新规划 |
 | `src/agent/search.py` | Yining | 封装 AISUM 调用：重试、缓存、去重、解析 JSON |
-| `/api/upload` | Jack | 图片上传到自建 Cloud Storage bucket，返回公开 URL |
+| `/api/upload` | Jack | 图片上传到自建私有 Cloud Storage bucket，返回签名 URL |
 | `static/` | Owen | 场景入口、上传、预算滑块、商品卡片、前后对比 |
 
 ## 接口（定稿前可以改，改了要同步告诉全队）

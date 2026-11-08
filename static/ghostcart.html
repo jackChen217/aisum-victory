@@ -179,8 +179,8 @@
         <label>Image URL (must open without signing in)
           <input type="url" id="image-url" required placeholder="https://images.unsplash.com/...">
         </label>
-        <p class="upload-note">Uploaded images are stored publicly for up to 1 day so the
-          product search can read them, then deleted.</p>
+        <p class="upload-note">Uploaded images are stored privately and deleted
+          automatically after 1 day.</p>
         <p class="examples">Try:
           <button type="button" data-example="desk">gaming desk</button>
           <button type="button" data-example="outfit">striped top outfit</button>
@@ -401,7 +401,7 @@ $('plan-form').addEventListener('submit', async (e) => {
   try {
     const data = await api('/api/plan', body);
     session = { id: data.session_id, budget, plan: data.plan, scenario: data.scenario, pins: {},
-                image: body.image_url,
+                image: data.original_image || body.image_url,
                 layers: Object.fromEntries(data.slots.map((s) => [s.slot, s.layer])) };
     renderAgentLine(data.report?._review);
     setupSlider(budget);
@@ -424,7 +424,8 @@ async function replanWith(budget, pins, doneText = null) {
     const data = await api('/api/replan', { session_id: session.id, budget, pin: pins });
     if (seq !== replanSeq) return;
     const previous = session.plan;
-    session = { ...session, budget, plan: data.plan, pins: data.pins || {} };
+    session = { ...session, budget, plan: data.plan, pins: data.pins || {},
+                image: data.original_image || session.image };
     render(data, data.changes, previous);
     const n = Object.values(data.changes).filter((c) => c !== 'unchanged').length;
     const bad = (data.infeasible || []).filter((i) => pins[i.slot]).map((i) => label(i.slot));

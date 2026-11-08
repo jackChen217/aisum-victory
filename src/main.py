@@ -451,7 +451,7 @@ async def lookboard_image(session_id: str, slot: str, uid: str = Depends(require
     """Image bytes for the Lookboard PNG export. `slot` is a planned slot, or "_photo"
     for the original photo. The URL comes from the user's own session, never the query."""
     try:
-        url = orchestrator.image_url_for(uid, session_id, slot)
+        url = await uploads.fresh(orchestrator.image_url_for(uid, session_id, slot))
     except SessionNotFound:
         return JSONResponse({"error": "This plan has expired. Generate a new one."},
                             status_code=404)
