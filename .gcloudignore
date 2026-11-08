@@ -8,3 +8,17 @@ env.yaml
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Test photos (may show real people), batch exports and experiments never ship.
+scratch/
+docs/
+tests/
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.heic
+!static/**/*.png
+!static/**/*.jpg
+ghostcart-batch-*.json
+eval_*.json
