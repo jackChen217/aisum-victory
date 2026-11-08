@@ -26,7 +26,7 @@ const GALLERY = [
   { id: 'photo-1539109136881-3be0616acf4b', gender: 'F', title: 'Powder blue coat', alt: 'Long blue coat with a tan bag' },
   { id: 'photo-1483985988355-763728e1935b', gender: 'F', title: 'Burgundy coat', alt: 'Burgundy coat and sunglasses' },
   { id: 'photo-1509631179647-0177331693ae', gender: 'F', title: 'Striped trousers', alt: 'Black striped trousers and a white top' },
-  { id: 'photo-1516826957135-700dedea698c', gender: 'F', title: 'Soft denim', alt: 'Pale sweatshirt and ripped jeans' },
+  { id: 'photo-1516826957135-700dedea698c', gender: 'M', title: 'Soft denim', alt: 'Pale sweatshirt and ripped jeans' },
   { id: 'photo-1617137968427-85924c800a22', gender: 'M', title: 'Navy suit', alt: 'Navy suit and brown shoes' },
   { id: 'photo-1552374196-1ab2a1c593e8', gender: 'M', title: 'Camel layers', alt: 'Camel jacket over a white tee' },
   { id: 'photo-1488161628813-04466f872be2', gender: 'M', title: 'Street jacket', alt: 'Black jacket, tan trousers and white sneakers' },
@@ -216,7 +216,6 @@ for (const look of GALLERY) {
       onclick: () => useLook(look) },
     el('img', { src: photo(look.id, 700), alt: look.alt, loading: 'lazy' }),
     el('span', { class: 'tile-shade' }),
-    el('span', { class: 'tile-tag' }, GENDER_LABEL[look.gender]),
     el('span', { class: 'tile-caption' }, el('strong', {}, look.title))));
 }
 
