@@ -23,7 +23,7 @@ import httpx
 
 from .. import llm_client
 from ..llm_client import LlmError
-from . import matching, planner
+from . import matching, outfit, planner, sizes
 from .optimizer import diff_plans, optimize
 
 log = logging.getLogger(__name__)
@@ -35,7 +35,9 @@ MAX_SESSIONS_PER_USER = 20
 GENERATE_EXPLANATIONS = False
 
 _PUBLIC_SLOT_KEYS = ("slot", "required", "weight", "query", "domain", "layer", "source",
-                     "detected_as")
+                     "detected_as", "item", "boxes", "detections", "unmatched")
+SCENARIOS = ("outfit", "desk", "room")
+OUTFIT_GENDERS = ("F", "M", "UNISEX")
 
 _EXPLAIN_RULES = (
     "Rules: 2-4 short sentences, plain English, no lists, no markdown. Use only facts "
@@ -74,26 +76,34 @@ ALTERNATIVES = 3
 
 async def plan(uid: str, image_url: str, scenario: str, budget: float,
                owned: list[str] | None = None, notes: str = "",
-               gender: str | None = None) -> dict:
-    """`scenario` "auto" lets image search decide (outfit if it detects clothing, else
-    desk). `gender` is the user's own choice (F / M), used for outfit only.
+               gender: str | None = None, desk_width: float | None = None,
+               desk_width_unit: str = "in") -> dict:
+    """The user picks `scenario` (outfit / desk / room); nothing is auto-detected.
+    Outfit needs the user's `gender` (F / M / UNISEX).
 
-    Default outfit path: native image search + deterministic budget optimization.
-    Desk still uses slot planning and one model category check per populated slot.
-    Extra model explanations are disabled unless GENERATE_EXPLANATIONS is enabled.
-    """
+    outfit: outfit.candidates (one image search, crop re-search for weak items,
+            unmatched items set aside; no LLM, 12 s) -> knapsack.
+    desk / room: DeepSeek slots -> text search -> one category check per slot ->
+            knapsack; sizes read from product names and compared with `desk_width`.
+    The explanation is a template unless GENERATE_EXPLANATIONS is on."""
+    if scenario not in SCENARIOS:
+        raise planner.PlanError(f"Choose a category: {', '.join(SCENARIOS)}.")
+    if scenario == "outfit" and gender not in OUTFIT_GENDERS:
+        raise planner.PlanError("Choose Women, Men or Unisex for an outfit.")
     owned = list(owned or [])
     started = time.perf_counter()
-    gender = gender if scenario in ("auto", "outfit") else None
-    slots = await planner.plan_slots(image_url, scenario, notes, budget=budget,
-                                     gender=gender)
-    scenario = planner.scenario_of(slots) if scenario == "auto" else scenario
-    detected = time.perf_counter()
     report: dict = {}
+    unmatched: list[dict] = []
+    desk_in = None
     if scenario == "outfit":
-        slots, candidates, scores = await planner.outfit_candidates(
-            image_url, slots, budget, report=report)
+        slots, unmatched, candidates, scores, phase = await outfit.candidates(
+            image_url, budget, gender, report, started)
+        detected = started + phase["image_search"] / 1000
     else:
+        gender = None
+        desk_in = sizes.to_inches(desk_width, desk_width_unit) if scenario == "desk" else None
+        slots = await planner.plan_slots(image_url, scenario, notes, budget=budget)
+        detected = time.perf_counter()
         candidates = await planner.find_candidates(slots, budget, report=report)
         candidates = await planner.check_categories(slots, candidates, report=report)
         candidates, scores = _text_ranked(slots, candidates)
@@ -101,7 +111,7 @@ async def plan(uid: str, image_url: str, scenario: str, budget: float,
     quality = {k: [m["quality"] for m in v] for k, v in scores.items()}
     result = optimize(slots, candidates, budget, owned, quality)
     optimized = time.perf_counter()
-    explanation = _fallback(result, budget)
+    explanation = _fallback(result, budget, unmatched=unmatched)
     if GENERATE_EXPLANATIONS:
         explanation = await _explain(_plan_prompt(scenario, notes, budget, result), explanation)
     explained = time.perf_counter()
@@ -110,16 +120,19 @@ async def plan(uid: str, image_url: str, scenario: str, budget: float,
     _save(uid, session_id, {
         "scenario": scenario, "image_url": image_url, "notes": notes, "gender": gender,
         "search_budget": budget, "budget": budget, "owned": owned, "pins": {},
-        "slots": slots, "candidates": candidates, "scores": scores, "plan": result["plan"],
+        "slots": slots, "unmatched": unmatched, "desk_width_in": desk_in,
+        "candidates": candidates, "scores": scores, "plan": result["plan"],
     })
-    return {
+    alternatives = _alternatives(result["plan"], candidates, scores)
+    out = {
         "session_id": session_id,
         "scenario": scenario,
-        "slots": [{k: s[k] for k in _PUBLIC_SLOT_KEYS if k in s} for s in slots],
+        "budget": budget,
+        "slots": [_public(s) for s in slots + unmatched],
         "plan": result["plan"],
         "match": _matches(result["plan"], candidates, scores),
-        "alternatives": _alternatives(result["plan"], candidates, scores),
-        "dropped": result["dropped"],
+        "alternatives": alternatives,
+        "dropped": result["dropped"] + _unmatched_dropped(unmatched),
         "infeasible": result["infeasible"],
         "total": result["total"],
         "explanation": explanation,
@@ -132,6 +145,9 @@ async def plan(uid: str, image_url: str, scenario: str, budget: float,
             "total": round((explained - started) * 1000, 2),
         },
     }
+    if scenario != "outfit":
+        out.update(_size_fields(result["plan"], alternatives, desk_in))
+    return out
 
 
 async def replan(uid: str, session_id: str, budget: float,
@@ -151,28 +167,35 @@ async def replan(uid: str, session_id: str, budget: float,
     for slot in unknown:
         pins.pop(slot)
 
-    slots, candidates, quality = _apply_pins(s["slots"], s["candidates"], s["scores"], pins)
+    # Pinning an alternative of an unmatched item brings that item into the plan.
+    unmatched = [u for u in s.get("unmatched", []) if u["slot"] not in pins]
+    base = s["slots"] + [u for u in s.get("unmatched", []) if u["slot"] in pins]
+    slots, candidates, quality = _apply_pins(base, s["candidates"], s["scores"], pins)
     result = optimize(slots, candidates, budget, owned, quality)
     changes = diff_plans(s["plan"], result["plan"])
-    explanation = _fallback(result, budget, changes)
+    explanation = _fallback(result, budget, changes, unmatched=unmatched)
     if GENERATE_EXPLANATIONS:
         explanation = await _explain(_replan_prompt(s, budget, owned, result, changes), explanation)
 
     s.update(budget=budget, owned=owned, pins=pins, plan=result["plan"],
              touched=time.time())
+    alternatives = _alternatives(result["plan"], s["candidates"], s["scores"])
     out = {
         "session_id": session_id,
+        "budget": budget,
         "plan": result["plan"],
         "match": _matches(result["plan"], s["candidates"], s["scores"]),
-        "alternatives": _alternatives(result["plan"], s["candidates"], s["scores"]),
+        "alternatives": alternatives,
         "pins": pins,
-        "dropped": result["dropped"],
+        "dropped": result["dropped"] + _unmatched_dropped(unmatched),
         "infeasible": result["infeasible"],
         "total": result["total"],
         "changes": changes,
         "explanation": explanation,
         "timings_ms": {"total": round((time.perf_counter() - started) * 1000, 2)},
     }
+    if s["scenario"] != "outfit":
+        out.update(_size_fields(result["plan"], alternatives, s.get("desk_width_in")))
     if unknown:
         out["ignored_pins"] = unknown
     if budget > s["search_budget"]:
@@ -183,8 +206,29 @@ async def replan(uid: str, session_id: str, budget: float,
     return out
 
 
+def _public(slot: dict) -> dict:
+    return {k: slot[k] for k in _PUBLIC_SLOT_KEYS if k in slot}
+
+
+def _unmatched_dropped(unmatched: list[dict]) -> list[dict]:
+    return [{"slot": u["slot"], "reason": "unmatched",
+             "message": "No similar product found."} for u in unmatched]
+
+
+def _size_fields(plan: dict, alternatives: dict, desk_in: float | None) -> dict:
+    """Desk / room: what each product name says about its size. Marks only; a
+    too_large product is not removed from the plan."""
+    checked = {slot: sizes.check(p, desk_in) for slot, p in plan.items()}
+    for alts in alternatives.values():
+        for a in alts:
+            a["size"] = sizes.check(a["product"], desk_in)
+    return {"sizes": checked, "desk_width_in": desk_in,
+            "too_large": [k for k, v in checked.items() if v["status"] == "too_large"],
+            "unverified": [k for k, v in checked.items() if v["status"] == "size_unverified"]}
+
+
 def _text_ranked(slots: list[dict], candidates: dict[str, list[dict]]):
-    """Desk / renter: rank + text (BM25 and attribute words); no colour."""
+    """Desk / room: rank + text (BM25 and attribute words); no colour."""
     ordered, scores = {}, {}
     for slot in slots:
         scored = matching.score_slot(slot, candidates.get(slot["slot"], []), None, {})
@@ -298,7 +342,8 @@ def invented_attributes(explanation: str, data_text: str) -> set[str]:
     return (_words(explanation) & _ATTRIBUTE_WORDS) - _words(data_text)
 
 
-def _fallback(result: dict, budget: float, changes: dict | None = None) -> str:
+def _fallback(result: dict, budget: float, changes: dict | None = None,
+              unmatched: list[dict] | None = None) -> str:
     """Plain, always-true text for when the model's explanation is missing or unusable."""
     n = len(result["plan"])
     text = (f"{n} item{'s' if n != 1 else ''} picked for ${result['total']:.2f} of your "
@@ -309,6 +354,10 @@ def _fallback(result: dict, budget: float, changes: dict | None = None) -> str:
     if result["infeasible"]:
         text += " Not filled: " + ", ".join(i["slot"].replace("_", " ")
                                             for i in result["infeasible"]) + "."
+    if unmatched:
+        text += (" No similar product found for: "
+                 + ", ".join(u["slot"].replace("_", " ") for u in unmatched)
+                 + " (see the alternatives).")
     return text
 
 

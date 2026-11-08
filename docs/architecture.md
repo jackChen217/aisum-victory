@@ -8,12 +8,13 @@ experimental pipeline).
 
 ## `POST /api/plan` (default path)
 
-`scenario` defaults to `auto`: image search runs first and decides. Detections mean an
-outfit; none (the tool returns a `note`) means a desk, planned by DeepSeek.
+The user always picks `scenario` (`outfit`, `desk` or `room`); nothing is
+auto-detected. An outfit also needs the user's `gender` (`F`, `M` or `UNISEX`).
 
-The default outfit path makes **no model calls**: AISUM's own ranking, then the
-knapsack. The explanation is a factual template (`GENERATE_EXPLANATIONS = False` in
-`orchestrator.py`; set it to `True` for the old LLM explanation).
+The outfit path (`src/agent/outfit.py`) makes **no model calls** and has a 12-second
+deadline: one image search, a crop re-search for weak items, unmatched items set aside,
+then the knapsack. The explanation is a factual template (`GENERATE_EXPLANATIONS =
+False` in `orchestrator.py`; set it to `True` for the old LLM explanation).
 
 ```mermaid
 sequenceDiagram
@@ -25,18 +26,26 @@ sequenceDiagram
     participant A as AISUM MCP
     participant D as DeepSeek (LLM gateway)
 
-    U->>API: image_url, budget, gender?, scenario=auto (Firebase ID token)
-    API->>API: require_user → uid
+    U->>API: image_url, budget, scenario, gender (outfit), desk_width? (Firebase ID token)
+    API->>API: require_user → uid, validate scenario + gender
     API->>O: plan(uid, ...)
-    O->>P: plan_slots(auto)
-    P->>A: search_products_by_image(image_url, max_price=budget, gender if chosen)
-    A-->>P: detections[] (item, item_detail, box, products) or note
 
-    alt detections → outfit
+    alt scenario = outfit (12 s deadline, no LLM)
+        O->>P: outfit.candidates
+        P->>A: search_products_by_image(image_url, gender, max_price=budget)
+        A-->>P: detections[] (item, item_detail, box, products) or note
         P->>P: one slot per detection, same item + item_detail merged (left/right shoe)
         P->>P: candidates = AISUM order, dedupe by p_key, repair mojibake
+        opt slots whose best score < 0.5
+            par at most 3 at once, cancelled near the deadline
+                P->>P: crop the box grown 10 % a side, upload to the bucket
+                P->>A: search_products_by_image(crop_url, category=item, gender, max_price)
+                A-->>P: detections[], keep the better result list
+            end
+        end
+        P->>P: still < 0.5 → unmatched (not planned, 3 alternatives)
         P->>P: quality = 1/(1+rank)
-    else no detections → desk
+    else scenario = desk / room
         P->>D: photo → slots JSON (slot, required, weight, query, domain)
         D-->>P: slots (one retry if it does not parse)
         par one text search per slot
@@ -48,14 +57,15 @@ sequenceDiagram
             D-->>P: {"reject": [ids]}
         end
         P->>P: score: rank + BM25/attributes
+        P->>P: sizes from product names (regex), compared with desk_width
     end
 
     P-->>O: slots, candidates (best first), quality scores
     O->>O: optimizer: multiple-choice knapsack in cents, whole plan ≤ budget
     O->>O: template explanation (no LLM by default)
     O->>O: save session (uid, session_id): slots, candidates, scores, plan
-    O-->>API: plan, match, alternatives, dropped, total, explanation, report, timings_ms
-    API-->>U: JSON → product cards, Lookboard (outfit), alternatives
+    O-->>API: plan, match, alternatives, dropped, budget, total, slots with boxes, report, timings_ms
+    API-->>U: JSON (or ?format=ui: the frontend's shape) → product cards, Lookboard, alternatives
 ```
 
 `/api/replan` reuses the saved candidates: no search, only the knapsack again.
@@ -73,10 +83,10 @@ shows A/B/C/D.
 | A | `raw` | no filters | literal `products[0]` per detection | not enforced | kept apart | none |
 | B | `budget` | `max_price=budget` (per item) | literal `products[0]` per detection | not enforced | kept apart | none |
 | C | `enhanced` | reuses B's response | old experimental pipeline (below) | knapsack | merged | 1 review call |
-| D | `default` | reuses B's response | the `/api/plan` default: AISUM order | knapsack | merged | none |
+| D | `default` | reuses B's response | AISUM order (the default path without crop re-search / unmatched) | knapsack | merged | none |
 
 B's `max_price` caps each item, not the outfit; D is B plus the whole-outfit
-knapsack, and gives the same plan as `/api/plan` on the same image-search response.
+knapsack. It equals `/api/plan` with the score cutoff set to 0.
 C and D search again (with `gender`) only when the user chose a gender; A and B never
 send it. Their `timings_ms.including_reused_search` adds B's search time.
 
@@ -181,7 +191,7 @@ flowchart LR
 | Use case | Route | External calls |
 | --- | --- | --- |
 | Upload image | `POST /api/upload` | Cloud Storage (public for 1 day) |
-| Generate plan | `POST /api/plan` | AISUM image search; desk also AISUM text search and DeepSeek (slots, category checks) |
+| Generate plan | `POST /api/plan` | outfit: AISUM image search (+ crop searches), Cloud Storage for crops; desk / room: DeepSeek (slots, category checks) and AISUM text search |
 | Change budget | `POST /api/replan` `{budget}` | none by default |
 | Swap in an alternative | `POST /api/replan` `{pin: {slot: p_key}}` | none by default |
 | Download Lookboard | `GET /api/lookboard-image` per image, canvas → PNG in the browser | the product image hosts, through the server |

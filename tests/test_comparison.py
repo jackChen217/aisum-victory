@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src import main
-from src.agent import comparison, orchestrator, planner
+from src.agent import comparison, orchestrator, outfit, planner
 from src.auth import require_user
 
 
@@ -86,8 +86,11 @@ def test_three_stages_keep_native_top1_reuse_pool_and_optimize(client, monkeypat
     assert default["total"] <= 60 and not default["over_budget"] and not default["infeasible"]
     assert default["total_budget_enforced"] and default["report"]["_matching"]["method"] == "image_rank"
     assert default["report"]["_comparison"]["reused_budget_search"]
-    # D is the /ghostcart default outfit path on the same image-search response.
-    official = asyncio.run(orchestrator.plan("comparison-user", request["image_url"], "outfit", 60))
+    # D is the /ghostcart default outfit path on the same image-search response, minus
+    # the crop re-search and unmatched step (switched off here with a zero cutoff).
+    monkeypatch.setattr(outfit, "SCORE_CUTOFF", 0)
+    official = asyncio.run(orchestrator.plan("comparison-user", request["image_url"], "outfit",
+                                             60, gender="UNISEX"))
     assert ({k: p["p_key"] for k, p in default["plan"].items()}
             == {k: p["p_key"] for k, p in official["plan"].items()})
     calls.pop()  # the orchestrator's own image search

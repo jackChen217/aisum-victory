@@ -8,7 +8,7 @@ optimizer.optimize() takes. Outfit slots also carry "candidates" (the products i
 search returned for that item), "source", "image_url", "item" and "boxes", so
 find_candidates can skip searching again and re-check weak slots against the photo.
 
-desk / renter: one DeepSeek call with the image decides the slots.
+desk / room: one DeepSeek call with the image decides the slots.
 outfit:        image search splits the photo into items. The default baseline keeps
                native candidate order with no extra model calls or image downloads.
 """
@@ -53,16 +53,17 @@ SCENARIOS = {
             "Do not list the PC itself unless the user asks for it."
         ),
     },
-    "renter": {
+    "room": {
         "domain": ["home_living", "tools"],
         "instructions": (
-            "The photo shows a rental room or apartment the user wants to furnish or "
-            "improve without permanent changes (no drilling, no painting, deposit-safe). "
-            "Break it into separate products: lighting, rugs, curtains, storage, shelving, "
-            "removable wall hooks or decor, bedding, mirrors, plants, small furniture. "
-            "Prefer renter-friendly versions (adhesive, freestanding, plug-in). Usually "
-            "required: what the room visibly lacks for daily use (lighting, storage). "
-            "Usually optional: decor."
+            "The photo shows a room the user wants to recreate or furnish. Break it into "
+            "the separate products someone would buy: furniture (sofa, bed, table, "
+            "chairs, shelving, storage), lighting, rugs, curtains, bedding, mirrors, wall "
+            "decor, plants, small accessories. Only list items visible in the photo or "
+            "clearly implied by the user's notes. If the notes say it is a rental, prefer "
+            "versions that need no drilling or painting (adhesive, freestanding, "
+            "plug-in). Usually required: the main furniture and lighting. Usually "
+            "optional: decor and accessories."
         ),
     },
     "outfit": {
@@ -126,10 +127,11 @@ async def search_text(query: str, *, domain: str | list[str] | None = None,
 
 async def search_image(image_url: str, *, min_price: float | None = None,
                        max_price: float | None = None, gender: str | None = None,
-                       top_k: int = 15) -> dict:
-    """search_products_by_image -> {"detections": [...], "note"?, "ignored_filters", ...}."""
+                       category: str | None = None, top_k: int = 15) -> dict:
+    """search_products_by_image -> {"detections": [...], "note"?, "ignored_filters", ...}.
+    An unsupported `category` comes back in ignored_filters, not as an error."""
     args = {"image_url": image_url, "min_price": min_price, "max_price": max_price,
-            "gender": gender, "top_k": top_k}
+            "gender": gender, "category": category, "top_k": top_k}
     mcp = await _client()
     return await mcp.call_waiting_once("search_products_by_image",
                                        {k: v for k, v in args.items() if v is not None})
@@ -153,7 +155,7 @@ GENDERS = {"F", "M", "KIDS", "UNISEX"}
 
 async def plan_slots(image_url: str, scenario: str, notes: str = "",
                      budget: float | None = None, gender: str | None = None) -> list[dict]:
-    """`budget` caps image-search prices (outfit); desk / renter ignore it here and
+    """`budget` caps image-search prices (outfit); desk / room ignore it here and
     apply it in find_candidates.
 
     `gender` (F / M / KIDS / UNISEX) only when the USER chose it — never inferred: many
@@ -161,26 +163,18 @@ async def plan_slots(image_url: str, scenario: str, notes: str = "",
     Used by outfit only; it is passed to image search and kept on each slot so the
     follow-up text searches use it too.
 
-    scenario "auto": image search first. Detections mean outfit; none (the photo is not
-    fashion, the tool says so in `note`) means desk, planned by DeepSeek. Which one was
-    used shows on the slots: outfit slots have source "image_search" (scenario_of)."""
-    if scenario != "auto" and scenario not in SCENARIOS:
-        raise ValueError(f"unknown scenario {scenario!r}; auto or one of {', '.join(SCENARIOS)}")
+    The user always picks the scenario; nothing is auto-detected. (The /api/plan
+    outfit path is outfit.candidates; this outfit branch serves the comparison page.)"""
+    if scenario not in SCENARIOS:
+        raise ValueError(f"unknown scenario {scenario!r}; one of {', '.join(SCENARIOS)}")
     if gender is not None and gender not in GENDERS:
         raise ValueError(f"gender must be one of {', '.join(sorted(GENDERS))} or None")
-    if scenario in ("auto", "outfit"):
+    if scenario == "outfit":
         res = await search_image(image_url, max_price=budget, gender=gender)
         if res.get("detections"):
             return _outfit_slots(res, image_url, gender)
-        if scenario == "outfit":
-            raise PlanError(res.get("note") or "No fashion items were detected in the photo.")
-        scenario = "desk"
+        raise PlanError(res.get("note") or "No fashion items were detected in the photo.")
     return await _llm_slots(image_url, scenario, notes)
-
-
-def scenario_of(slots: list[dict]) -> str:
-    """"outfit" when the slots came from image search, else "desk" (the auto fallback)."""
-    return "outfit" if any(s.get("source") == "image_search" for s in slots) else "desk"
 
 
 async def _llm_slots(image_url: str, scenario: str, notes: str) -> list[dict]:
@@ -515,7 +509,7 @@ async def find_candidates(slots: list[dict], budget: float,
                           report: dict | None = None) -> dict[str, list[dict]]:
     """Search every slot at once; return cleaned candidates per slot.
 
-    - A slot without candidates (desk, renter, or an item review_outfit added) is
+    - A slot without candidates (desk, room, or an item review_outfit added) is
       text-searched with its query, domain and gender.
     - A slot with image-search candidates keeps them; if review_outfit corrected it
       ("refine_query"), a fashion text search on the sharper description is merged in,
@@ -594,7 +588,7 @@ CATEGORY_CHECK_TOP_N = 10  # only these are checked — and kept; the rest rank 
 
 async def check_categories(slots: list[dict], candidates: dict[str, list[dict]],
                            report: dict | None = None) -> dict[str, list[dict]]:
-    """Desk / renter: drop candidates that are the wrong product type — one DeepSeek
+    """Desk / room: drop candidates that are the wrong product type — one DeepSeek
     call per slot, at most MAX_CONCURRENT_CHECKS at once, over each slot's first
     CATEGORY_CHECK_TOP_N candidates (the rest are cut). Outfits use the keyword rules
     in matching.category_filter instead, with no LLM call.

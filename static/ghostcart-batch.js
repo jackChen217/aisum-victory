@@ -1,6 +1,6 @@
 const $ = (id) => document.getElementById(id);
 const BUILD = 'outfit-four-way-v3';
-const MODES = [['raw', 'A · AISUM 原始第一名'], ['budget', 'B · 只加价格上限第一名'], ['enhanced', 'C · 实验增强＋整套预算'], ['default', 'D · 默认路径：原生排序＋整套预算']];
+const MODES = [['raw', 'A · AISUM 原始第一名'], ['budget', 'B · 只加价格上限第一名'], ['enhanced', 'C · 实验增强＋整套预算'], ['default', 'D · 原生排序＋整套预算']];
 // D is cheap and C can time out, so D runs before C; panels still show A/B/C/D.
 const RUN_ORDER = ['raw', 'budget', 'default', 'enhanced'];
 const TITLE = Object.fromEntries(MODES);
@@ -146,7 +146,7 @@ function renderEntry(entry, index) {
     for (const [mode, title] of MODES) {
       const panel = document.createElement('div'); panel.className = 'variant'; panel.append(text('h3', title));
       const v = entry.variants[mode];
-      panel.append(text('p', mode === 'raw' ? '不加价格或性别条件；每个检测项取第 1 个。' : mode === 'budget' ? `只加每件 ≤ ${money(run.settings.budget)}；整套可能超预算。` : mode === 'default' ? '/ghostcart 默认：左右鞋合并，保留 AISUM 排序，整套 ≤ 预算。' : '审核补漏、文字补搜、颜色/文字重排，再约束整套预算。', 'meta'));
+      panel.append(text('p', mode === 'raw' ? '不加价格或性别条件；每个检测项取第 1 个。' : mode === 'budget' ? `只加每件 ≤ ${money(run.settings.budget)}；整套可能超预算。` : mode === 'default' ? '默认路径（不含裁剪重搜）：左右鞋合并，保留 AISUM 排序，整套 ≤ 预算。' : '审核补漏、文字补搜、颜色/文字重排，再约束整套预算。', 'meta'));
       if (v?.plan) {
         panel.append(text('p', `${v.unknown_prices ? '已知价格合计 ' : '合计 '}${money(v.total)} · ${elapsed(v)} 秒`, 'variant-total'));
         if (v.unknown_prices) panel.append(text('p', `${v.unknown_prices} 件价格未知，不能判断完整总价。`, 'error'));
@@ -176,6 +176,7 @@ $('start').onclick = async () => {
   const budget = Number($('budget').value);
   if (!Number.isFinite(budget) || budget <= 0 || budget > 100000) { status('预算需大于 0，且不超过 $100,000。'); return; }
   if (busy || !files.length || !owner) return;
+  if ($('test-mode').value !== 'triple' && $('scenario').value === 'outfit' && !$('gender').value) { status('单组穿搭需要先选性别：Women / Men / Unisex。'); return; }
   const selected = [...files], uid = owner;
   busy = true; stop = false;
   run = { id: crypto.randomUUID(), uid, created: Date.now(), version: BUILD,

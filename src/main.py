@@ -34,11 +34,12 @@ import httpx
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from . import image_proxy, llm_client, uploads
-from .agent import comparison, orchestrator, planner
+from .agent import comparison, orchestrator, planner, ui_format
 from .agent.orchestrator import SessionNotFound
+from .agent.outfit import PlanTimeout
 from .agent.planner import PlanError
 from .auth import require_user
 from .config import (FIREBASE_API_KEY, FIREBASE_APP_ID, FIREBASE_AUTH_DOMAIN,
@@ -308,19 +309,41 @@ def _step(n: int, started: float | None = None, **fields) -> dict:
 
 class PlanRequest(BaseModel):
     image_url: str
-    scenario: str = Field(default="auto", pattern="^(auto|desk|outfit|renter)$")
+    # The user always chooses; there is no auto-detect.
+    scenario: Literal["outfit", "desk", "room"]
     budget: float = Field(gt=0, le=100_000)
     owned: list[str] = []
     notes: str = Field(default="", max_length=2000)
-    # The user's own choice; None means "Any". Applied to outfit searches only.
-    gender: Literal["F", "M"] | None = None
+    # The user's own choice. Required for outfit (Women / Men / Unisex), unused otherwise.
+    gender: Literal["F", "M", "UNISEX"] | None = None
+    # Desk only: the user's desk width; product sizes are read from product names.
+    desk_width: float | None = Field(default=None, gt=0, le=1000)
+    desk_width_unit: Literal["in", "cm"] = "in"
+
+    @model_validator(mode="after")
+    def _outfit_needs_gender(self):
+        if self.scenario == "outfit" and self.gender is None:
+            raise ValueError("gender is required for an outfit: F, M or UNISEX")
+        return self
+
+
+def _shaped(data: dict, uid: str, fmt: str | None) -> dict:
+    """`?format=ui`: the frontend's shape (src/agent/ui_format.py), else as is."""
+    if fmt != "ui":
+        return data
+    return ui_format.to_ui(data, orchestrator.SESSIONS[(uid, data["session_id"])])
 
 
 @app.post("/api/plan")
-async def plan(req: PlanRequest, uid: str = Depends(require_user)):
+async def plan(req: PlanRequest, uid: str = Depends(require_user),
+               format: Literal["ui"] | None = None):
     try:
-        return await orchestrator.plan(uid, req.image_url, req.scenario, req.budget,
-                                       req.owned, req.notes, req.gender)
+        data = await orchestrator.plan(uid, req.image_url, req.scenario, req.budget,
+                                       req.owned, req.notes, req.gender,
+                                       req.desk_width, req.desk_width_unit)
+        return _shaped(data, uid, format)
+    except PlanTimeout as e:
+        return JSONResponse({"error": str(e)}, status_code=504)
     except PlanError as e:
         # Nothing usable in the photo (or the model never produced slots): the user's
         # input, not our outage — say what happened.
@@ -336,7 +359,7 @@ class ComparisonRequest(BaseModel):
     budget: float = Field(gt=0, le=100_000)
     mode: Literal["raw", "budget", "enhanced", "default"]
     comparison_id: str | None = None
-    gender: Literal["F", "M"] | None = None
+    gender: Literal["F", "M", "UNISEX"] | None = None
 
 
 @app.post("/api/compare/outfit")
@@ -366,10 +389,12 @@ class ReplanRequest(BaseModel):
 
 
 @app.post("/api/replan")
-async def replan(req: ReplanRequest, uid: str = Depends(require_user)):
+async def replan(req: ReplanRequest, uid: str = Depends(require_user),
+                 format: Literal["ui"] | None = None):
     try:
-        return await orchestrator.replan(uid, req.session_id, req.budget, req.owned,
+        data = await orchestrator.replan(uid, req.session_id, req.budget, req.owned,
                                          req.pin)
+        return _shaped(data, uid, format)
     except SessionNotFound:
         return JSONResponse({"error": "This plan has expired. Generate a new one."},
                             status_code=404)

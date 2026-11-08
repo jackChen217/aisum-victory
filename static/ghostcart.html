@@ -97,6 +97,12 @@
   @media (max-width: 640px) {
     .lb, .lb.has-side { grid-template-columns: 1fr; }
   }
+  .size { margin: 4px 0 0; font-size: 12px; color: var(--soft); }
+  .size.too_large { color: #b91c1c; font-weight: 600; }
+  .item.unmatched { border: 1px dashed var(--border); border-radius: 8px; padding: 8px; }
+  .item.unmatched p { margin: 0 0 6px; font-size: 14px; }
+  .width-row { display: flex; gap: 6px; }
+  .width-row input { width: 90px; } .width-row select { width: auto; }
 </style>
 </head>
 <body class="gated">
@@ -141,12 +147,25 @@
           <label>Budget (USD)
             <input type="number" id="budget" min="1" step="1" value="350" required>
           </label>
-          <label id="gender-wrap">Shopping for (outfits)
+          <label>Category
+            <select id="scenario" required>
+              <option value="" disabled selected>Choose…</option>
+              <option value="outfit">Outfit</option>
+              <option value="desk">Desk</option>
+              <option value="room">Room</option>
+            </select>
+          </label>
+          <label id="gender-wrap" hidden>Shopping for
             <select id="gender">
-              <option value="">Any</option>
+              <option value="" disabled selected>Choose…</option>
               <option value="F">Women</option>
               <option value="M">Men</option>
+              <option value="UNISEX">Unisex</option>
             </select>
+          </label>
+          <label id="width-wrap" hidden>Desk width (optional)
+            <span class="width-row"><input type="number" id="desk-width" min="1" step="0.1" placeholder="e.g. 48">
+            <select id="desk-unit"><option value="in">in</option><option value="cm">cm</option></select></span>
           </label>
         </div>
         <div id="drop" class="drop">
@@ -169,15 +188,6 @@
         </p>
         <div class="go-row">
           <button id="go" class="primary" type="submit">Generate plan</button>
-          <!-- Auto-detect is the default: image search decides outfit vs desk. This only
-               overrides it when the guess is wrong. -->
-          <label class="override">Type:
-            <select id="scenario">
-              <option value="auto">Auto-detect</option>
-              <option value="outfit">Outfit</option>
-              <option value="desk">Desk setup</option>
-            </select>
-          </label>
         </div>
       </form>
       <p id="status"></p>
@@ -229,14 +239,17 @@
 const $ = (id) => document.getElementById(id);
 
 const EXAMPLES = {
-  desk: { scenario: 'auto', budget: 350,
+  desk: { scenario: 'desk', budget: 350,
     url: 'https://images.unsplash.com/photo-1696710257827-75e2e5954059?w=1080&q=85&fm=jpg' },
-  outfit: { scenario: 'auto', budget: 150,
+  outfit: { scenario: 'outfit', gender: 'F', budget: 150,
     url: 'https://images.unsplash.com/photo-1758543144593-95061a3f418a?w=1080&q=85&fm=jpg' },
-  winter: { scenario: 'auto', budget: 150,
+  winter: { scenario: 'outfit', gender: 'F', budget: 150,
     url: 'https://images.unsplash.com/photo-1652473291442-7a2e034a00d1?w=1080&q=85&fm=jpg' },
 };
-const REASONS = { over_budget: 'over budget', owned: 'you own it', no_candidates: 'nothing found' };
+const REASONS = { over_budget: 'over budget', owned: 'you own it', no_candidates: 'nothing found',
+                  unmatched: 'no similar product found' };
+const SIZE_TEXT = { too_large: 'Too large for your desk', fits: 'Fits your desk (per title)',
+                    size_unverified: 'Size unverified', not_checked: 'Size from title' };
 
 let session = null;   // { id, budget, plan, scenario, image }
 let replanSeq = 0;    // drop replies to slider moves that were overtaken
@@ -305,22 +318,26 @@ function render(data, changes = null, previous = {}) {
       pin.append('📌 Your pick', un);
       item.append(pin);
     }
-    const alts = data.alternatives?.[slot] || [];
-    if (alts.length) {
-      const row = document.createElement('div'); row.className = 'alts';
-      row.append('Or:');
-      for (const { product: q } of alts) {
-        const b = document.createElement('button'); b.type = 'button';
-        b.title = `${q.product_name} · ${money(q.product_price)} — use this one`;
-        const im = document.createElement('img'); im.alt = q.product_name || ''; im.loading = 'lazy';
-        if (q.img_url) im.src = q.img_url;
-        b.append(im);
-        b.addEventListener('click', () => replanWith(session.budget,
-          { ...(session.pins || {}), [slot]: q.p_key }, `Swapped in ${label(slot)}: ${(q.product_name || '').slice(0, 40)}`));
-        row.append(b);
-      }
-      item.append(row);
+    const size = data.sizes?.[slot];
+    if (size) {
+      const tag = document.createElement('p'); tag.className = `size ${size.status}`;
+      tag.textContent = SIZE_TEXT[size.status] + (size.text ? ` · ${size.text}` : '');
+      item.append(tag);
     }
+    const alts = data.alternatives?.[slot] || [];
+    if (alts.length) item.append(altsRow(slot, alts, 'Or:'));
+    grid.append(item);
+  }
+  // Items the photo shows but no close product was found for: not in the plan,
+  // their nearest products are offered to pin instead.
+  for (const d of (data.dropped || []).filter((x) => x.reason === 'unmatched')) {
+    const item = document.createElement('div'); item.className = 'item unmatched';
+    const head = document.createElement('p');
+    head.innerHTML = `<strong></strong> — no similar product found`;
+    head.querySelector('strong').textContent = label(d.slot);
+    item.append(head);
+    const alts = data.alternatives?.[d.slot] || [];
+    if (alts.length) item.append(altsRow(d.slot, alts, 'Closest:'));
     grid.append(item);
   }
   const ul = $('left-out'); ul.replaceChildren();
@@ -332,12 +349,28 @@ function render(data, changes = null, previous = {}) {
   }
   const unfilled = new Set((data.infeasible || []).map((i) => i.slot));
   for (const d of data.dropped || []) {
-    if (changes?.[d.slot] === 'removed') continue;
+    if (changes?.[d.slot] === 'removed' || d.reason === 'unmatched') continue;
     const li = document.createElement('li');
     li.textContent = `${unfilled.has(d.slot) ? 'Needed but not filled' : 'Left out'}: `
       + `${label(d.slot)} — ${REASONS[d.reason] || d.reason}`;
     ul.append(li);
   }
+}
+
+function altsRow(slot, alts, title) {
+  const row = document.createElement('div'); row.className = 'alts';
+  row.append(title);
+  for (const { product: q } of alts) {
+    const b = document.createElement('button'); b.type = 'button';
+    b.title = `${q.product_name} · ${money(q.product_price)} — use this one`;
+    const im = document.createElement('img'); im.alt = q.product_name || ''; im.loading = 'lazy';
+    if (q.img_url) im.src = q.img_url;
+    b.append(im);
+    b.addEventListener('click', () => replanWith(session.budget,
+      { ...(session.pins || {}), [slot]: q.p_key }, `Swapped in ${label(slot)}: ${(q.product_name || '').slice(0, 40)}`));
+    row.append(b);
+  }
+  return row;
 }
 
 function setupSlider(budget) {
@@ -352,10 +385,18 @@ $('plan-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const budget = Number($('budget').value);
   const requested = $('scenario').value;
+  if (!requested) { setStatus('Choose a category: Outfit, Desk or Room.', 'error'); return; }
+  if (requested === 'outfit' && !$('gender').value) {
+    setStatus('Choose who the outfit is for: Women, Men or Unisex.', 'error'); return;
+  }
+  const width = Number($('desk-width').value);
   const body = { image_url: $('image-url').value.trim(), scenario: requested, budget,
-                 gender: requested === 'desk' ? null : ($('gender').value || null) };
+                 gender: requested === 'outfit' ? $('gender').value : null,
+                 ...(requested === 'desk' && width > 0
+                   ? { desk_width: width, desk_width_unit: $('desk-unit').value } : {}) };
   $('go').disabled = true;
-  setStatus('Reading the photo, searching and checking products… this takes up to a minute.');
+  setStatus(requested === 'outfit' ? 'Finding each item in the photo… (up to 12 seconds)'
+            : 'Reading the photo, searching and checking products… this takes up to a minute.');
   const t0 = performance.now();
   try {
     const data = await api('/api/plan', body);
@@ -400,6 +441,8 @@ for (const b of document.querySelectorAll('[data-example]')) {
   b.addEventListener('click', () => {
     const ex = EXAMPLES[b.dataset.example];
     $('scenario').value = ex.scenario; $('budget').value = ex.budget; setImage(ex.url);
+    if (ex.gender) $('gender').value = ex.gender;
+    showGender();
     showGender();
   });
 }
@@ -431,7 +474,7 @@ async function uploadFile(file) {
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || `Upload failed (HTTP ${r.status})`);
     setImage(data.url);
-    setStatus('Uploaded. Pick a scenario and budget, then generate the plan.');
+    setStatus('Uploaded. Pick a category and budget, then generate the plan.');
   } catch (err) {
     setStatus(err.message, 'error');
   } finally {
@@ -457,7 +500,13 @@ document.addEventListener('paste', (e) => {
 });
 
 // ── Gender (outfit only; the user's own choice, never guessed) ─────────
-function showGender() { $('gender-wrap').hidden = $('scenario').value === 'desk'; }
+// Category is always the user's choice; outfits also need Women / Men / Unisex.
+function showGender() {
+  const v = $('scenario').value;
+  $('gender-wrap').hidden = v !== 'outfit';
+  $('gender').required = v === 'outfit';
+  $('width-wrap').hidden = v !== 'desk';
+}
 
 // What the outfit review changed: the items it added and the descriptions it fixed.
 function renderAgentLine(review) {

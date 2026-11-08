@@ -257,29 +257,19 @@ def test_clean_repairs_without_touching_original():
     assert original["product_name"] == "Laptop 15â€ 16:10"
 
 
-# ── auto scenario ────────────────────────────────────────────────────────
+# ── scenario is always the user's choice ────────────────────────────────
 
-def test_auto_uses_outfit_when_clothes_are_detected(monkeypatch):
-    async def fake_image(image_url, **kw):
-        return {"detections": [det("coat", "red coat", "c1")]}
-
-    monkeypatch.setattr(planner, "search_image", fake_image)
-    slots = asyncio.run(planner.plan_slots("https://x", "auto", budget=100))
-    assert planner.scenario_of(slots) == "outfit" and slots[0]["slot"] == "coat"
-
-
-def test_auto_falls_back_to_desk_planning(monkeypatch):
-    async def fake_image(image_url, **kw):
-        return {"detections": [], "note": "Image shows furniture and electronics."}
+def test_no_auto_scenario_and_room_uses_llm_slots(monkeypatch):
+    with pytest.raises(ValueError):
+        asyncio.run(planner.plan_slots("https://x", "auto", budget=100))
 
     async def fake_chat(messages, tools=None):
-        assert "desk or workstation" in messages[1]["content"][0]["text"]
-        return {"message": {"content": '[{"slot": "monitor", "query": "27 inch monitor"}]'}}
+        assert "a room the user wants" in messages[1]["content"][0]["text"]
+        return {"message": {"content": '[{"slot": "rug", "query": "beige wool rug"}]'}}
 
-    monkeypatch.setattr(planner, "search_image", fake_image)
     monkeypatch.setattr(planner.llm_client, "chat", fake_chat)
-    slots = asyncio.run(planner.plan_slots("https://x", "auto", budget=100))
-    assert planner.scenario_of(slots) == "desk" and slots[0]["slot"] == "monitor"
+    slots = asyncio.run(planner.plan_slots("https://x", "room", budget=100))
+    assert slots[0]["slot"] == "rug" and slots[0]["domain"] == ["home_living", "tools"]
 
 
 # ── review_outfit ────────────────────────────────────────────────────────

@@ -2,16 +2,29 @@
 
 这个文件给 Claude Code 和队友看：比赛规则、API 限制、架构和分工。**不要在这里写任何 key。**
 
-## 当前默认路径（11/7 晚，`main`）
+## 当前默认路径（11/7 夜，`main`）
 
-`/ghostcart` 和 `POST /api/plan` 的穿搭流程：
-1. `search_products_by_image`（`max_price` = 预算，用户选了才传 `gender`）。
-2. item 和 item_detail 都相同的 detection（左右鞋）合并成一个 slot。
-3. 每个 slot 的候选就是 AISUM 返回的顺序：按 `p_key` 去重、修乱码，标题近似但 ID 不同的颜色/图案变体保留；quality = 1/(1+rank)。
-4. 背包算法（按美分精确 DP）保证整套 ≤ 预算；缺价格和 Renewed 由优化器排除。
-5. 解释用事实模板，不调 LLM（`GENERATE_EXPLANATIONS=True` 可恢复旧解释）。
+入口：用户必须先选品类 Outfit / Desk / Room（`scenario` = `outfit|desk|room`，必填，**没有自动判断**，`auto` 和 `renter` 返回 422）；Outfit 还必须选性别 Women / Men / Unisex（`gender` = `F|M|UNISEX`，不选返回 422）。
 
-所以默认穿搭流程**不调用任何模型**：没有整图审核、文字补搜、颜色/BM25 重排、下载候选图取色。旧的增强流程保留在 `outfit_candidates(..., enhanced=True)`，只用于对照。API 返回 `timings_ms`（识别、候选、优化、解释、总耗时）。预算、备选、固定商品和拼图接口不变。桌面路径没有简化，仍是看图拆清单 + 逐类 LLM 检查。
+Outfit（`src/agent/outfit.py`，**不调用 LLM，整体 12 秒截止**）：
+1. `search_products_by_image` 一次（`gender`、`max_price` = 预算）。
+2. item 和 item_detail 都相同的 detection（左右鞋）合并成一个 slot；候选保持 AISUM 顺序，按 `p_key` 去重、修乱码；quality = 1/(1+rank)。
+3. 第一名 score < 0.5 的 slot：取最大的 box，四边各外扩 10%，从原图裁下（短边不足 320px 就放大到 320），上传到 bucket，再用 `search_products_by_image`（`category` = 这个 item、`gender`、`max_price`）重搜一次；两次里最高分更高的那份候选留下。最多 3 个并发；离截止不到 0.4 秒时没回来的重搜取消，保留第一次结果。
+4. 还是 < 0.5 的 slot 标成 unmatched：不进方案，`dropped` 里 `{"reason": "unmatched", "message": "No similar product found."}`，`alternatives` 里仍有 3 个最接近的；replan 时 pin 其中一个会把它加回方案。
+5. 背包算法（按美分精确 DP），整套严格 ≤ 预算；缺价格和 Renewed 排除。
+- 第一次图片搜索超过 12 秒返回 504。不支持的 `category` 会出现在 `report[slot].crop_search.ignored_filters`。
+- 注意：裁剪后物品在图里变大，score 天然更高，所以“取两次里更好的”几乎总是选裁剪结果（10 张实测 11 次重搜 10 次被采用）。两次的分数不完全可比。
+
+Desk / Room：DeepSeek 看图拆清单 → 文字搜索 → 每个 slot 一次 LLM 类别检查 → 背包。没有 12 秒限制。尺寸只从商品名用正则读（`src/agent/sizes.py`：inch / in / " / cm / mm 和 `A x B (x C)`；不读 ft，不访问商品页）：用户填了桌宽（`desk_width`，`desk_width_unit` = in|cm，只用于 Desk）就比较宽度（标了 W 的那一维，否则前两维较大的，单个尺寸就用它），更宽的标 `too_large`，读不到的标 `size_unverified`，读到但没填桌宽的标 `not_checked`。**只标记，不剔除。**
+
+返回（`/api/plan`、`/api/replan`，原有字段不变，只增加）：
+- `budget`；`slots[]` 包含 unmatched 的 slot（`unmatched: true`），每个 slot 有 `item`、`boxes`、`detections[]`（id、item、item_detail、`box` = 归一化 [x1,y1,x2,y2]）。
+- `plan`（每个 slot 选中的商品）、`alternatives`（每个 slot 3 个）、`dropped`（over_budget / owned / no_candidates / unmatched）、`infeasible`、`session_id`、`total`。
+- Desk / Room 另有 `sizes`、`too_large`、`unverified`、`desk_width_in`，备选里每个有 `size`。
+- `report` 里每个 slot 有 `top_score`、`crop_search`；`report._crop_search` 统计 triggered / improved / timed_out / failed。
+- `?format=ui`（plan 和 replan 都支持）：按前端格式输出 session_id、category、category_label、title、budget、total_price、is_over_budget、original_image、comparison_image（目前为 null，服务器没有拼图）、matched_products[]（每个带 3 个同格式 alternatives）、detected_items[]（每个 detection 一条，含 bounding_box、matched_product、status）、unmatched_items[]。实现在 `src/agent/ui_format.py`。**`scratch/test_data.json` 当时不在仓库里，字段内部结构是按字段名推的，拿到样例后要对一遍。** Yining 的 `src/api_format.py` 可以直接复用或替换它。
+
+解释用事实模板（`GENERATE_EXPLANATIONS=True` 可恢复 LLM 解释）。旧的增强流程保留在 `planner.outfit_candidates(..., enhanced=True)`，只用于对照。
 
 ## 批量测试与四组对照（`/ghostcart/batch`）
 
@@ -23,10 +36,10 @@
 | A | `raw` | 不加任何条件 | 每个 detection 原样取 `products[0]` | 不限制，可能超 | 不合并 | 无 |
 | B | `budget` | 只加 `max_price=预算`（每件上限） | 每个 detection 原样取 `products[0]` | 不限制，可能超 | 不合并 | 无 |
 | C | `enhanced` | 复用 B 的响应 | 旧增强流程：审核补漏、文字补搜、类别规则、颜色/BM25 重排 | 背包 | 合并 | 审核 1 次 |
-| D | `default` | 复用 B 的响应 | **就是 `/ghostcart` 默认路径**：AISUM 原生排序 | 背包 | 合并 | 无 |
+| D | `default` | 复用 B 的响应 | 默认路径去掉裁剪重搜和 unmatched：AISUM 原生排序 | 背包 | 合并 | 无 |
 
 - A/B 不清洗、不合并；缺价格单列为 `unknown_prices`，合计可能超预算。**不要把 B 的每件价格上限当成整套预算**，D 才是 B 加上整套预算。
-- C/D 默认复用 B 的完整原始响应；用户选了 gender 时另搜一次（A/B 永远不带 gender）。C/D 的 `timings_ms.including_reused_search` 包含被复用的 B 搜索耗时。D 的方案和同一图片搜索响应下 `/api/plan` 的方案一致（有测试，也用一张 Unsplash 图实测过）。
+- C/D 默认复用 B 的完整原始响应；用户选了 gender 时另搜一次（A/B 永远不带 gender）。C/D 的 `timings_ms.including_reused_search` 包含被复用的 B 搜索耗时。D 等于把 score 门槛设为 0 时的 `/api/plan` 方案（有测试）；现在的默认路径多了裁剪重搜和 unmatched，D 没有。
 - 阶段超时 120 秒；增强流程取消时收回已派出的搜索/下载任务。
 - 响应/JSON 含请求参数、完整 `raw_response`、检测框、选中商品在原图片搜索中的排名、补搜来源、警告和耗时。`/api/comparison-image` 验证用户归属，只代理会话中已有的商品 URL。对照会话和正式计划隔离，每账号最多 10 个，在内存里。
 - 原图＋A/B/C/D 可单张/整批导出 PNG、导出 JSON。最近 5 批按账号存在本浏览器 IndexedDB（不是云端，清浏览器就没了）；旧记录只显示单组，不补算缺失的原始响应。服务器会话过期后图片代理导出会失败，跑完应尽快下载。
@@ -110,7 +123,7 @@
 - `static/ghostcart.html`（`/ghostcart`）：测试页面，有场景选择（desk / outfit）、outfit 的性别选项（Any / Women / Men）、图片上传和链接、预算、三个示例按钮、商品卡片、总价和解释、预算滑块和换货标记（Swapped / Added / Removed）。
 - Lookboard（只在 outfit）：结果区上方，左边原图，右边按穿着位置排列（帽子/配饰 → 外套/上衣 → 裤子/裙子 → 鞋，包在旁边），下面是总价和预算；改预算会跟着更新。"Download image" 用 canvas 导出 1200×900 PNG，商品图通过 `GET /api/lookboard-image?session_id=&slot=` 代理（只能取自己会话里的图，只允许 https 公网地址、不跟随跳转）。
 - 图片上传：`POST /api/upload`（要登录），请求体是 JPG/PNG 原始字节（最大 8 MB，按文件头判断类型），存到 bucket `aisum-hackathon-juliet-uploads`（us-central1、uniform access、allUsers 可读、1 天自动删除）的 `uploads/<随机名>`，返回 `https://storage.googleapis.com/...` 公开链接；用 google-cloud-storage + ADC。页面上有上传按钮、拖拽和 ⌘V 粘贴，上传后自动填链接并显示预览。部署到 Cloud Run 时服务账号要有这个 bucket 的 objectCreator 权限，环境变量加 `UPLOAD_BUCKET`。
-- 测试：`.venv/bin/python -m pytest`，133 个用例，全部离线。
+- 测试：`.venv/bin/python -m pytest`，140 个用例，全部离线。
 
 实测（Python 直接调 orchestrator）：
 - 电竞桌面 $350：7–8 件，第一次出方案约 50 秒（类别检查那次 DeepSeek 调用约 35 秒）；预算改成 $250 后重新规划约 6 秒。

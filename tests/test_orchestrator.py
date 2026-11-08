@@ -69,9 +69,10 @@ def test_plan_then_replan(client, fakes):
     assert data["total"] == 350
     assert data["explanation"] == "Here is why."
     assert data["report"] == {"mouse": {"ignored_filters": ["domain"]}}
-    # Internal slot fields are not sent to the browser.
-    assert all(set(s) <= {"slot", "required", "weight", "query", "domain", "layer", "source",
-                          "detected_as"} for s in data["slots"])
+    # Internal slot fields (candidates, image_url) are not sent; boxes are, for the frontend.
+    assert all(set(s) <= set(orchestrator._PUBLIC_SLOT_KEYS) for s in data["slots"])
+    assert data["slots"][0]["boxes"] == [[0, 0, 1, 1]]
+    assert data["budget"] == 350
     assert data["scenario"] == "desk"
     assert fakes["plan_slots"] == [("https://x/desk.jpg", "desk", "black theme", 350)]
 
@@ -120,7 +121,7 @@ def test_plan_error_is_422_with_message(client, monkeypatch):
         raise orchestrator.planner.PlanError("Image shows furniture.")
 
     monkeypatch.setattr(orchestrator.planner, "plan_slots", no_items)
-    r = client.post("/api/plan", json={"image_url": "https://x", "scenario": "outfit",
+    r = client.post("/api/plan", json={"image_url": "https://x", "scenario": "room",
                                        "budget": 100})
     assert r.status_code == 422 and r.json()["error"] == "Image shows furniture."
 
@@ -185,16 +186,56 @@ def test_explanation_still_inventing_falls_back(client, monkeypatch):
     assert r["explanation"] == "2 items picked for $350.00 of your $350 budget."
 
 
-def test_gender_reaches_outfit_planning_only(client, fakes):
-    client.post("/api/plan", json={"image_url": "https://x", "scenario": "outfit",
-                                   "budget": 150, "gender": "M"})
-    assert fakes["gender"] == "M"
-    client.post("/api/plan", json={"image_url": "https://x", "scenario": "desk",
+def test_category_and_outfit_gender_are_required(client, fakes, monkeypatch):
+    seen = []
+
+    async def outfit_candidates(image_url, budget, gender, report, started=None):
+        seen.append(gender)
+        return [], [], {}, {}, {"image_search": 1, "crop_search": 0}
+
+    monkeypatch.setattr(orchestrator.outfit, "candidates", outfit_candidates)
+    url = "https://x"
+    assert client.post("/api/plan", json={"image_url": url, "budget": 150}).status_code == 422
+    for scenario in ("auto", "renter"):
+        assert client.post("/api/plan", json={"image_url": url, "scenario": scenario,
+                                              "budget": 150}).status_code == 422
+    r = client.post("/api/plan", json={"image_url": url, "scenario": "outfit", "budget": 150})
+    assert r.status_code == 422 and seen == []          # outfit without gender
+    for g in ("F", "M", "UNISEX"):
+        assert client.post("/api/plan", json={"image_url": url, "scenario": "outfit",
+                                              "budget": 150, "gender": g}).status_code == 200
+    assert seen == ["F", "M", "UNISEX"]
+    assert client.post("/api/plan", json={"image_url": url, "scenario": "outfit",
+                                          "budget": 150, "gender": "X"}).status_code == 422
+    client.post("/api/plan", json={"image_url": url, "scenario": "desk",
                                    "budget": 150, "gender": "M"})
     assert fakes["gender"] is None  # ignored outside outfit
-    r = client.post("/api/plan", json={"image_url": "https://x", "scenario": "outfit",
-                                       "budget": 150, "gender": "X"})
-    assert r.status_code == 422
+
+
+def test_desk_sizes_are_read_from_names(client, monkeypatch):
+    cands = {"monitor": [{**p("M1", 300), "product_name": "Gaming Desk 55 x 24 Inch"},
+                         p("M2", 150)],
+             "mouse": [{**p("m1", 50), "product_name": "Mouse pad 31.5x11.8 in"}, p("m2", 20)]}
+
+    async def find_candidates(slots, budget, report=None):
+        return cands
+
+    monkeypatch.setattr(orchestrator.planner, "find_candidates", find_candidates)
+    d = client.post("/api/plan", json={"image_url": "https://x", "scenario": "desk",
+                                       "budget": 350, "desk_width": 120,
+                                       "desk_width_unit": "cm"}).json()
+    assert d["desk_width_in"] == 47.24
+    assert d["sizes"]["monitor"]["status"] == "too_large"
+    assert d["sizes"]["mouse"]["status"] == "fits"
+    assert d["too_large"] == ["monitor"] and d["unverified"] == []
+    assert d["plan"]["monitor"]["p_key"] == "M1"      # marked, not removed
+    assert d["alternatives"]["monitor"][0]["size"] == {"status": "size_unverified"}
+    re = client.post("/api/replan", json={"session_id": d["session_id"], "budget": 200}).json()
+    assert re["sizes"]["monitor"]["status"] == "size_unverified"   # M2 has no size
+    assert re["unverified"] == ["monitor"] and re["budget"] == 200
+    room = client.post("/api/plan", json={"image_url": "https://x", "scenario": "room",
+                                          "budget": 350}).json()
+    assert room["sizes"]["monitor"]["status"] == "not_checked"
 
 
 # ── Lookboard image proxy ────────────────────────────────────────────────
@@ -228,33 +269,6 @@ def test_proxy_refuses_non_public_urls(url):
     import asyncio
     with pytest.raises(main.image_proxy.ImageFetchError):
         asyncio.run(main.image_proxy.fetch(url))
-
-
-def test_auto_outfit_uses_the_outfit_pipeline(client, fakes, monkeypatch):
-    async def outfit_slots(image_url, scenario, notes="", budget=None, gender=None):
-        fakes["gender"] = gender
-        return [dict(s, source="image_search", image_url=image_url) for s in SLOTS]
-
-    ran = []
-
-    async def pipeline(image_url, slots, budget, report=None):
-        ran.append((image_url, budget))
-        report["_review"] = {"corrected": [], "added": [{"slot": "socks"}], "removed": []}
-        scores = {k: [{"rank": 1, "colour": None, "text": None, "quality": 1 / (1 + i)}
-                      for i in range(len(v))] for k, v in CANDS.items()}
-        return slots, CANDS, scores
-
-    async def no_llm_check(*a, **kw):
-        raise AssertionError("outfits use keyword rules, not the LLM category check")
-
-    monkeypatch.setattr(orchestrator.planner, "plan_slots", outfit_slots)
-    monkeypatch.setattr(orchestrator.planner, "outfit_candidates", pipeline)
-    monkeypatch.setattr(orchestrator.planner, "check_categories", no_llm_check)
-    d = client.post("/api/plan", json={"image_url": "https://x/o.jpg", "budget": 150,
-                                       "gender": "F"}).json()   # scenario defaults to auto
-    assert d["scenario"] == "outfit" and ran == [("https://x/o.jpg", 150)]
-    assert fakes["gender"] == "F"
-    assert d["report"]["_review"]["added"] == [{"slot": "socks"}]
 
 
 def test_desk_does_not_run_review(client, monkeypatch):

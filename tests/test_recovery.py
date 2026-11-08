@@ -9,7 +9,7 @@ from src.auth import require_user
 def product(key, name, price):
     return {"p_key": key, "product_name": name, "product_price": price,
             "img_url": f"https://example.test/{key}.jpg",
-            "click_url": f"https://example.test/buy/{key}?affiliate=keep"}
+            "click_url": f"https://example.test/buy/{key}?affiliate=keep", "score": 0.8}
 
 
 def test_native_variants_survive_and_budget_pins_need_no_extra_calls(monkeypatch):
@@ -42,7 +42,7 @@ def test_native_variants_survive_and_budget_pins_need_no_extra_calls(monkeypatch
         with TestClient(main.app) as client:
             response = client.post("/api/plan", json={
                 "image_url": "https://example.test/outfit.jpg", "scenario": "outfit",
-                "budget": 100})
+                "budget": 100, "gender": "UNISEX"})
             assert response.status_code == 200
             first = response.json()
             assert first["plan"]["shirt"]["p_key"] == "red"
