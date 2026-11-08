@@ -87,8 +87,9 @@ def test_three_stages_keep_native_top1_reuse_pool_and_optimize(client, monkeypat
     assert default["total_budget_enforced"] and default["report"]["_matching"]["method"] == "image_rank"
     assert default["report"]["_comparison"]["reused_budget_search"]
     # D is the /ghostcart default outfit path on the same image-search response, minus
-    # the crop re-search and unmatched step (switched off here with a zero cutoff).
-    monkeypatch.setattr(outfit, "SCORE_CUTOFF", 0)
+    # the crop re-search and unmatched step (switched off here with zero cutoffs).
+    monkeypatch.setattr(outfit, "CROP_CUTOFF", 0)
+    monkeypatch.setattr(outfit, "UNMATCHED_CUTOFF", 0)
     official = asyncio.run(orchestrator.plan("comparison-user", request["image_url"], "outfit",
                                              60, gender="UNISEX"))
     assert ({k: p["p_key"] for k, p in default["plan"].items()}

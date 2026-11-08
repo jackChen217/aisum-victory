@@ -80,9 +80,9 @@ def test_weak_items_are_cropped_and_kept_or_unmatched(fake):
     assert sorted(kw["category"] for kw in crops) == ["bag", "shoe"]
     assert all(kw["gender"] == "F" and kw["max_price"] == 100 for kw in crops)
     assert fake["image"][0][1] == {"max_price": 100, "gender": "F"}
-    # The bigger shoe box, grown 10 % a side: 0.18 x 0.072 of 1000x1500 -> 180x108,
-    # enlarged to a 320 short side.
-    assert (533, 320) in fake["uploads"] or (534, 320) in fake["uploads"]
+    # The box of the better-scoring shoe (0.38 > 0.36), grown 10 % a side:
+    # 0.12 x 0.06 of 1000x1500 -> 120x90, enlarged to a 320 short side.
+    assert (427, 320) in fake["uploads"]
     assert report["_crop_search"]["triggered"] == 2 and report["_crop_search"]["improved"] == 1
     assert report["shoe"]["crop_search"]["used"] and not report["bag"]["crop_search"]["used"]
     assert report["bag"]["unmatched"]
@@ -198,3 +198,41 @@ def test_ui_format_for_plan_and_replan(fake):
     finally:
         main.app.dependency_overrides.clear()
         orchestrator.SESSIONS.clear()
+
+
+def test_crop_uses_the_best_scoring_detection_not_the_largest(fake, monkeypatch):
+    # Two detections share item_detail; the big one is a false detection (a face).
+    sock = {"detections": [
+        det("sock", "white sock", [prod("s1", 4, 0.38)], (0.43, 0.86, 0.48, 0.91)),
+        det("sock", "white sock", [prod("s2", 3, 0.10)], (0.40, 0.25, 0.49, 0.33)),
+    ]}
+    boxes = []
+
+    async def search_image(url, **kw):
+        if url == "https://x/photo.jpg":
+            return sock
+        return {"detections": []}
+
+    real_crop = outfit.crop_jpeg
+    monkeypatch.setattr(planner, "search_image", search_image)
+    monkeypatch.setattr(outfit, "crop_jpeg", lambda photo, box: boxes.append(box) or real_crop(photo, box))
+    asyncio.run(outfit.candidates("https://x/photo.jpg", 100, "M", {}))
+    assert boxes == [[0.43, 0.86, 0.48, 0.91]]
+
+
+def test_crop_below_050_unmatched_below_045(fake, monkeypatch):
+    first = {"detections": [
+        det("watch", "black watch", [prod("w1", 16, 0.47)]),     # crop tried, still 0.47
+        det("sock", "white sock", [prod("k1", 4, 0.40)]),        # crop tried, still 0.40
+        det("coat", "grey coat", [prod("c1", 50, 0.49)]),        # crop tried, 0.49 kept
+    ]}
+
+    async def search_image(url, **kw):
+        return first if url == "https://x/photo.jpg" else {"detections": []}
+
+    monkeypatch.setattr(planner, "search_image", search_image)
+    report = {}
+    planned, unmatched, *_ = asyncio.run(outfit.candidates("https://x/photo.jpg", 100, "F", report))
+    assert report["_crop_search"]["triggered"] == 3       # all under 0.5
+    assert {s["slot"] for s in planned} == {"watch", "coat"}
+    assert [s["slot"] for s in unmatched] == ["sock"]      # only under 0.45

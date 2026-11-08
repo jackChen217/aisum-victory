@@ -36,14 +36,14 @@ sequenceDiagram
         A-->>P: detections[] (item, item_detail, box, products) or note
         P->>P: one slot per detection, same item + item_detail merged (left/right shoe)
         P->>P: candidates = AISUM order, dedupe by p_key, repair mojibake
-        opt slots whose best score < 0.5
+        opt slots whose best score < 0.5 (CROP_CUTOFF)
             par at most 3 at once, cancelled near the deadline
-                P->>P: crop the box grown 10 % a side, upload to the bucket
+                P->>P: crop the best-scoring detection's box grown 10 % a side, upload
                 P->>A: search_products_by_image(crop_url, category=item, gender, max_price)
                 A-->>P: detections[], keep the better result list
             end
         end
-        P->>P: still < 0.5 → unmatched (not planned, 3 alternatives)
+        P->>P: still < 0.45 (UNMATCHED_CUTOFF) → unmatched (not planned, 3 alternatives)
         P->>P: quality = 1/(1+rank)
     else scenario = desk / room
         P->>D: photo → slots JSON (slot, required, weight, query, domain)

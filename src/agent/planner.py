@@ -267,7 +267,10 @@ def _outfit_slots(res: dict, image_url: str, gender: str | None = None) -> list[
             group["boxes"].append(d["box"])
         group["products"] += d.get("products") or []
         group["detections"].append({"id": i, "item": item, "item_detail": detail,
-                                    "box": d.get("box")})
+                                    "box": d.get("box"),
+                                    "top_score": max((p.get("score") or 0.0
+                                                      for p in d.get("products") or []),
+                                                     default=0.0)})
 
     slots, counts = [], {}
     for g in merged.values():

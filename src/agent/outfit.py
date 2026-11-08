@@ -2,11 +2,12 @@
 
 1. search_products_by_image once, with the user's gender and max_price = budget.
 2. Detections with the same item + item_detail (left / right shoe) become one slot.
-3. A slot whose best score is below SCORE_CUTOFF is searched again: its box, grown by
-   CROP_PAD on every side, is cut out of the photo, uploaded, and searched with
-   category = the item, the same gender and max_price. The better of the two result
-   lists (by best score) is kept. At most MAX_CROP_SEARCHES at once.
-4. Still below SCORE_CUTOFF: the slot is "unmatched" ("no similar product found").
+3. A slot whose best score is below CROP_CUTOFF is searched again: its box (of the
+   slot's detections, the one AISUM scored best), grown by CROP_PAD on every side, is
+   cut out of the photo, uploaded, and searched with category = the item, the same
+   gender and max_price. The better of the two result lists (by best score) is kept.
+   At most MAX_CROP_SEARCHES at once.
+4. Still below UNMATCHED_CUTOFF: the slot is "unmatched" ("no similar product found").
    It is not planned; its first candidates are still returned as alternatives.
 5. The orchestrator then runs the knapsack: the whole outfit stays within budget.
 
@@ -26,7 +27,10 @@ from . import planner
 
 log = logging.getLogger(__name__)
 
-SCORE_CUTOFF = 0.5
+CROP_CUTOFF = 0.5        # below this, search again on a crop of the item
+UNMATCHED_CUTOFF = 0.45  # below this after that, "no similar product found"
+# 11/7: 0.5 -> 0.45 after checking the unmatched items of three 10-photo batches:
+# the closest products (a black rectangular watch at 0.489) looked like the photo.
 CROP_PAD = 0.10           # of the box's width / height, on each side
 CROP_MIN_SIDE = 320       # small crops (shoes) are enlarged to this short side
 MAX_CROP_SEARCHES = 3
@@ -68,9 +72,17 @@ def crop_jpeg(photo, box: list[float]) -> bytes:
 
 
 def _box(slot: dict) -> list[float] | None:
-    """The largest box of the slot's detections (one shoe of a pair is enough)."""
+    """The box to crop: of the slot's detections, the one whose own products scored
+    best (one shoe of a pair is enough), ties to the larger box. Not simply the
+    largest: two detections can share an item_detail while one is a false detection
+    (a "white sock" box on a face), and the largest box may be the wrong one."""
+    def area(b):
+        return (b[2] - b[0]) * (b[3] - b[1])
+    dets = [d for d in slot.get("detections") or [] if d.get("box") and len(d["box"]) == 4]
+    if dets:
+        return max(dets, key=lambda d: (d.get("top_score") or 0.0, area(d["box"])))["box"]
     boxes = [b for b in slot.get("boxes") or [] if b and len(b) == 4]
-    return max(boxes, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]), default=None)
+    return max(boxes, key=area, default=None)
 
 
 async def _crop_search(photo, slot: dict, budget: float, gender: str | None) -> dict:
@@ -113,8 +125,9 @@ async def candidates(image_url: str, budget: float, gender: str | None,
         if s.get("ignored_filters"):
             entry["ignored_filters"] = s["ignored_filters"]
 
-    weak = [s for s in slots if first[s["slot"]] < SCORE_CUTOFF and _box(s)]
-    crop = {"cutoff": SCORE_CUTOFF, "triggered": len(weak), "improved": 0,
+    weak = [s for s in slots if first[s["slot"]] < CROP_CUTOFF and _box(s)]
+    crop = {"cutoff": CROP_CUTOFF, "unmatched_cutoff": UNMATCHED_CUTOFF,
+            "triggered": len(weak), "improved": 0,
             "timed_out": 0, "failed": 0}
     if weak:
         gate = asyncio.Semaphore(MAX_CROP_SEARCHES)
@@ -162,7 +175,7 @@ async def candidates(image_url: str, budget: float, gender: str | None,
 
     planned, unmatched = [], []
     for s in slots:
-        if first[s["slot"]] < SCORE_CUTOFF:
+        if first[s["slot"]] < UNMATCHED_CUTOFF:
             unmatched.append({**s, "unmatched": True, "required": False})
             report[s["slot"]]["unmatched"] = True
         else:

@@ -9,10 +9,11 @@
 Outfit（`src/agent/outfit.py`，**不调用 LLM，整体 12 秒截止**）：
 1. `search_products_by_image` 一次（`gender`、`max_price` = 预算）。
 2. item 和 item_detail 都相同的 detection（左右鞋）合并成一个 slot；候选保持 AISUM 顺序，按 `p_key` 去重、修乱码；quality = 1/(1+rank)。
-3. 第一名 score < 0.5 的 slot：取最大的 box，四边各外扩 10%，从原图裁下（短边不足 320px 就放大到 320），上传到 bucket，再用 `search_products_by_image`（`category` = 这个 item、`gender`、`max_price`）重搜一次；两次里最高分更高的那份候选留下。最多 3 个并发；离截止不到 0.4 秒时没回来的重搜取消，保留第一次结果。
-4. 还是 < 0.5 的 slot 标成 unmatched：不进方案，`dropped` 里 `{"reason": "unmatched", "message": "No similar product found."}`，`alternatives` 里仍有 3 个最接近的；replan 时 pin 其中一个会把它加回方案。
+3. 第一名 score < 0.5（`CROP_CUTOFF`）的 slot：取这个 slot 里 AISUM 自己打分最高的那个 detection 的 box（不是最大的：同名的两个 detection 里可能有一个是误检，例如脸上的 "white sock"），四边各外扩 10%，从原图裁下（短边不足 320px 就放大到 320），上传到 bucket，再用 `search_products_by_image`（`category` = 这个 item、`gender`、`max_price`）重搜一次；两次里最高分更高的那份候选留下。最多 3 个并发；离截止不到 0.4 秒时没回来的重搜取消，保留第一次结果。
+4. 还是 < 0.45（`UNMATCHED_CUTOFF`，11/7 从 0.5 降下来：三批 30 张里被 0.5 挡掉的手表，备选 0.489 的黑色方形表其实很像）的 slot 标成 unmatched：不进方案，`dropped` 里 `{"reason": "unmatched", "message": "No similar product found."}`，`alternatives` 里仍有 3 个最接近的；replan 时 pin 其中一个会把它加回方案。
 5. 背包算法（按美分精确 DP），整套严格 ≤ 预算；缺价格和 Renewed 排除。
 - 第一次图片搜索超过 12 秒返回 504。不支持的 `category` 会出现在 `report[slot].crop_search.ignored_filters`。
+- 重搜门槛 0.5 和 unmatched 门槛 0.45 是两个常量：如果重搜也降到 0.45，三批里 9 件首搜 0.45–0.5 的单品会失去裁剪重搜（重搜后它们是 0.62–0.86）。
 - 注意：裁剪后物品在图里变大，score 天然更高，所以“取两次里更好的”几乎总是选裁剪结果（10 张实测 11 次重搜 10 次被采用）。两次的分数不完全可比。
 
 Desk / Room：DeepSeek 看图拆清单 → 文字搜索 → 每个 slot 一次 LLM 类别检查 → 背包。没有 12 秒限制。尺寸只从商品名用正则读（`src/agent/sizes.py`：inch / in / " / cm / mm 和 `A x B (x C)`；不读 ft，不访问商品页）：用户填了桌宽（`desk_width`，`desk_width_unit` = in|cm，只用于 Desk）就比较宽度（标了 W 的那一维，否则前两维较大的，单个尺寸就用它），更宽的标 `too_large`，读不到的标 `size_unverified`，读到但没填桌宽的标 `not_checked`。**只标记，不剔除。**
