@@ -3,688 +3,242 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GhostCart</title>
-<link rel="stylesheet" href="/static/style.css">
-<style>
-  /* style.css pulls this line up under index.html's progress strip; there is none here. */
-  .notice-line { margin: 0 0 20px; }
-  .form { display: grid; gap: 12px; }
-  .form label { display: grid; gap: 4px; font-size: 14px; color: var(--muted); }
-  .form .inline { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
-  .form .inline > label { flex: 1 1 140px; }
-  .form input, .form select, .form textarea {
-    font: inherit; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
-    background: var(--surface); color: var(--text); width: 100%; box-sizing: border-box; }
-  .drop { display: flex; gap: 14px; align-items: center; padding: 14px;
-          border: 2px dashed var(--border); border-radius: 10px; background: var(--bg); }
-  .drop.over { border-color: var(--accent); background: var(--err-bg); }
-  .drop.busy { opacity: .6; }
-  .drop img { width: 96px; height: 96px; object-fit: cover; border-radius: 8px;
-              flex: none; background: #fff; }
-  .drop-text { display: grid; gap: 6px; font-size: 14px; color: var(--muted); }
-  .drop-text button { justify-self: start; }
-  .upload-note { margin: -4px 0 0; font-size: 13px; color: var(--soft); }
-  .examples { font-size: 13px; color: var(--soft); }
-  .go-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-  .form .override { display: flex; align-items: center; gap: 6px; font-size: 13px;
-                    color: var(--soft); }
-  .form .override select { width: auto; padding: 3px 6px; font-size: 13px; }
-  .agent-line { margin: 8px 0 0; font-size: 14px; color: var(--muted); background: var(--bg);
-                border-radius: 8px; padding: 8px 12px; }
-  .agent-line strong { color: var(--text); }
-  .agent-line ul { margin: 4px 0 0; padding-left: 18px; }
-  .examples button { font-size: 13px; padding: 2px 8px; }
-  #status { min-height: 1.4em; font-size: 14px; color: var(--muted); margin: 8px 0 0; }
-  #status[data-state="error"] { color: var(--err); }
-
-  .summary { display: flex; justify-content: space-between; align-items: baseline;
-             flex-wrap: wrap; gap: 8px; }
-  .total { font-size: 28px; font-weight: 700; }
-  .total small { font-size: 15px; font-weight: 400; color: var(--muted); }
-  .explain { margin: 8px 0 0; line-height: 1.5; }
-  .slider { display: grid; gap: 4px; margin-top: 16px; font-size: 14px; color: var(--muted); }
-  .slider input { width: 100%; }
-  .note-warn { font-size: 14px; color: var(--err); background: var(--err-bg);
-               border-radius: 8px; padding: 8px 12px; margin: 12px 0 0; }
-
-  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
-  .product { display: flex; flex-direction: column; text-decoration: none; color: inherit;
-             background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
-             overflow: hidden; box-shadow: var(--shadow); position: relative; }
-  .product:hover { border-color: var(--muted); }
-  .product img { width: 100%; aspect-ratio: 1; object-fit: contain; background: #fff; }
-  .product .body { padding: 10px 12px 12px; display: grid; gap: 4px; }
-  .product .slot { font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
-                   color: var(--soft); }
-  .product .name { font-size: 14px; line-height: 1.35; display: -webkit-box;
-                   -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-  .product .price { font-weight: 700; }
-  .product.changed { border: 2px solid var(--accent); }
-  .item { display: grid; gap: 6px; align-content: start; }
-  .alts { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--soft); }
-  .alts button { padding: 0; border: 1px solid var(--border); border-radius: 6px;
-                 background: #fff; width: 44px; height: 44px; overflow: hidden; cursor: pointer; }
-  .alts button:hover { border-color: var(--accent); }
-  .alts img { width: 100%; height: 100%; object-fit: contain; }
-  .pinned { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--accent); }
-  .pinned button { font-size: 12px; padding: 0 6px; }
-  .badge { position: absolute; top: 8px; left: 8px; font-size: 12px; font-weight: 700;
-           color: #fff; background: var(--accent); border-radius: 999px; padding: 2px 8px; }
-  .badge.added { background: var(--ok); }
-  .was { font-size: 12px; color: var(--soft); text-decoration: line-through; }
-  .left-out { font-size: 14px; color: var(--muted); margin: 12px 0 0; padding-left: 18px; }
-  .left-out .removed { color: var(--accent); }
-
-  /* Lookboard: photo on the left, the picked items top to toe on the right. */
-  .lb-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-  .lb-head h2 { margin: 0; font-size: 18px; }
-  .lb { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px;
-        margin-top: 12px; }
-  .lb.has-side { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, .45fr); }
-  .lb-photo { background: var(--bg); border-radius: 10px; overflow: hidden;
-              display: flex; align-items: center; justify-content: center; min-height: 240px; }
-  .lb-photo img { width: 100%; max-height: 560px; object-fit: contain; }
-  .lb-items, .lb-side { display: grid; gap: 10px; align-content: start; }
-  .lb-row { display: flex; gap: 10px; justify-content: center; }
-  .lb-item { flex: 1 1 0; max-width: 180px; text-align: center; font-size: 12px;
-             color: var(--muted); text-decoration: none; position: relative; }
-  .lb-item img { width: 100%; aspect-ratio: 1; object-fit: contain; background: #fff;
-                 border: 1px solid var(--border); border-radius: 8px; }
-  .lb-item.changed img { border: 2px solid var(--accent); }
-  .lb-item .price { display: block; font-weight: 700; color: var(--text); }
-  .lb-total { margin-top: 12px; font-size: 20px; font-weight: 700; }
-  .lb-total span { font-size: 14px; font-weight: 400; color: var(--muted); }
-  @media (max-width: 640px) {
-    .lb, .lb.has-side { grid-template-columns: 1fr; }
-  }
-  .size { margin: 4px 0 0; font-size: 12px; color: var(--soft); }
-  .size.too_large { color: #b91c1c; font-weight: 600; }
-  .item.unmatched { border: 1px dashed var(--border); border-radius: 8px; padding: 8px; }
-  .item.unmatched p { margin: 0 0 6px; font-size: 14px; }
-  .width-row { display: flex; gap: 6px; }
-  .width-row input { width: 90px; } .width-row select { width: auto; }
-</style>
+<title>GhostCart Studio — Shop the gap, not the guesswork</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/styles.css">
 </head>
 <body class="gated">
-<div class="wrap">
+<div class="page">
 
-  <header class="top">
-    <div>
-      <h1>GhostCart</h1>
-      <p class="lede">A photo and a budget in; the best set of products that fits, out.</p>
-      <p><a href="/ghostcart/batch">批量测试：一次选最多 10 张图 →</a></p>
-    </div>
-    <div class="who">
+  <header class="site-header">
+    <a class="brand" href="/ghostcart" aria-label="GhostCart Studio home">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3a7 7 0 0 0-7 7v10l2.4-1.6 2.3 1.6L12 18.4l2.3 1.6 2.3-1.6L19 20V10a7 7 0 0 0-7-7Zm-2.4 7.1a1.15 1.15 0 1 1 0 2.3 1.15 1.15 0 0 1 0-2.3Zm4.8 0a1.15 1.15 0 1 1 0 2.3 1.15 1.15 0 0 1 0-2.3Z"/></svg>
+      </span>
+      <span class="brand-name">GhostCart <span>Studio</span></span>
+    </a>
+    <div class="account">
       <span id="whoami" hidden></span>
-      <button id="signout" hidden>Sign out</button>
+      <button id="signout" class="btn btn-ghost btn-sm" type="button" hidden>Sign out</button>
     </div>
   </header>
-
-  <!-- Required notice, short form — on screen while signed in, where people type. -->
-  <p class="notice-line">Your searches are sent to AISUM's services and logged against this
-    app, not against your account. The team that built this app can see the email you sign in with.
-    <a href="https://aisum-hackathon.web.app/privacy">Privacy notice</a></p>
+  <p id="autherr" class="form-msg" hidden></p>
 
   <section id="gate" class="card gate">
-    <button id="gate-signin" class="primary">Sign in with Google</button>
-    <!-- Required notice — do not remove without reading docs/setup.md, checkpoint 1.
-         Right under the sign-in button, so it is on screen when people sign in. -->
+    <h1>One photo.<br><span>One perfect cart.</span></h1>
+    <p class="hero-lede">Show us a look you love. We find real products that match it, inside your budget.</p>
+    <button id="gate-signin" class="btn btn-primary btn-lg" type="button">Sign in with Google</button>
+    <!-- Required notice — do not remove without reading docs/setup.md, checkpoint 1. -->
     <p class="notice-consent">
       Built for AISUM Hackathon 2026. Signing in creates an account in a Google Cloud
       project AISUM operates. Your searches are sent to AISUM's services to produce
       results and are logged there against this app, not against your account. The team that built this app can see the email you sign in with.
       <a href="https://aisum-hackathon.web.app/privacy">Privacy notice</a>
     </p>
-    <p id="gate-err" class="err" hidden></p>
+    <p id="gate-err" class="form-msg" hidden></p>
   </section>
 
   <main id="app">
-    <p id="autherr" class="err" hidden></p>
-
-    <section class="card">
-      <form id="plan-form" class="form">
-        <div class="inline">
-          <label>Budget (USD)
-            <input type="number" id="budget" min="1" step="1" value="350" required>
-          </label>
-          <label>Category
-            <select id="scenario" required>
-              <option value="" disabled selected>Choose…</option>
-              <option value="outfit">Outfit</option>
-              <option value="desk">Desk</option>
-              <option value="room">Room</option>
-            </select>
-          </label>
-          <label id="gender-wrap" hidden>Shopping for
-            <select id="gender">
-              <option value="" disabled selected>Choose…</option>
-              <option value="F">Women</option>
-              <option value="M">Men</option>
-              <option value="UNISEX">Unisex</option>
-            </select>
-          </label>
-          <label id="width-wrap" hidden>Desk width (optional)
-            <span class="width-row"><input type="number" id="desk-width" min="1" step="0.1" placeholder="e.g. 48">
-            <select id="desk-unit"><option value="in">in</option><option value="cm">cm</option></select></span>
-          </label>
+    <!-- Step 1: search -->
+    <section id="search-view" class="view search-view">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <div class="hero-meta">
+            <span class="step-pill">Step 1 of 2</span>
+            <span class="hero-meta-text">Search</span>
+          </div>
+          <h1 id="hero-title">One photo.<br><span>One perfect cart.</span></h1>
+          <p class="hero-lede">
+            Show us the look you love and set a budget. We find real products that match
+            it, then rebuild the set whenever your budget changes.
+          </p>
         </div>
-        <div id="drop" class="drop">
-          <img id="preview" alt="" hidden>
-          <div class="drop-text">
-            <button type="button" id="pick">Upload image</button>
-            <span>or drag a JPG/PNG here, or paste a screenshot (⌘V). Max 8 MB.</span>
-            <input type="file" id="file" accept="image/jpeg,image/png" hidden>
+
+        <div class="hero-dropzones">
+          <div class="dropzone" id="photo-zone" role="button" tabindex="0" aria-label="Upload a photo">
+            <input type="file" id="photo-input" class="visually-hidden" accept="image/jpeg,image/png">
+            <div class="dz-empty" id="photo-empty">
+              <span class="dz-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 15-4.5-4.5L7 20"/></svg>
+              </span>
+              <span class="dz-eyebrow">Inspiration photo</span>
+              <strong>Drop the look you love</strong>
+              <span class="dz-hint">Click, drag or paste (⌘V) · JPG or PNG · max 8 MB</span>
+            </div>
+            <div class="dz-preview" id="photo-preview" hidden>
+              <img id="photo-img" alt="Your photo">
+              <div class="dz-preview-bar">
+                <span id="photo-name"></span>
+                <button type="button" id="photo-remove" class="icon-btn" aria-label="Remove photo">×</button>
+              </div>
+              <p class="dz-status" id="photo-status"></p>
+            </div>
           </div>
         </div>
-        <label>Image URL (must open without signing in)
-          <input type="url" id="image-url" required placeholder="https://images.unsplash.com/...">
-        </label>
-        <p class="upload-note">Uploaded images are stored privately and deleted
-          automatically after 1 day.</p>
-        <p class="examples">Try:
-          <button type="button" data-example="desk">gaming desk</button>
-          <button type="button" data-example="outfit">striped top outfit</button>
-          <button type="button" data-example="winter">winter coat outfit</button>
-        </p>
-        <div class="go-row">
-          <button id="go" class="primary" type="submit">Generate plan</button>
+      </section>
+
+      <section class="search-panel card" id="search-panel" aria-labelledby="category-label">
+        <div class="search-top">
+          <div class="category-block">
+            <p class="control-label" id="category-label">Category</p>
+            <div class="scene-chips" id="scene-chips">
+              <button class="scene-chip" type="button" data-category="outfit" aria-pressed="false">Outfit</button>
+              <button class="scene-chip" type="button" data-category="desk" aria-pressed="false">Desk <span class="beta">Beta</span></button>
+              <button class="scene-chip" type="button" data-category="room" aria-pressed="false">Room <span class="beta">Beta</span></button>
+            </div>
+          </div>
+          <div class="search-actions">
+            <div class="budget-field">
+              <label class="budget-label" for="budget-input">Budget:</label>
+              <div class="budget-control">
+                <span class="budget-currency" aria-hidden="true">$</span>
+                <input type="number" id="budget-input" value="150" min="1" max="100000" step="1" inputmode="numeric">
+              </div>
+            </div>
+            <button id="generate" class="btn btn-primary btn-lg" type="button">
+              <span id="generate-text">Generate Plan</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+            </button>
+          </div>
         </div>
-      </form>
-      <p id="status"></p>
+
+        <div class="filter-row" id="gender-row" hidden>
+          <div class="filter-row-label"><span class="control-label">Outfit</span></div>
+          <div class="context-filters">
+            <label class="filter-field">
+              <span class="filter-label">Shopping for</span>
+              <span class="select-wrap">
+                <select id="gender">
+                  <option value="">Choose…</option>
+                  <option value="F">Women</option>
+                  <option value="M">Men</option>
+                  <option value="UNISEX">Unisex</option>
+                </select>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <p id="form-msg" class="form-msg" role="alert" hidden></p>
+
+        <!-- Required notice, short form — on screen while signed in, where people type. -->
+        <p class="notice-line">
+          Your searches are sent to AISUM's services and logged against this app, not
+          against your account. The team that built this app can see the email you sign in with.
+          <a href="https://aisum-hackathon.web.app/privacy">Privacy notice</a>
+          Uploaded images are stored privately and deleted automatically after 1 day.
+        </p>
+      </section>
+
+      <section class="gallery" aria-labelledby="gallery-title">
+        <div class="gallery-head">
+          <p class="eyebrow">Community gallery</p>
+          <h2 id="gallery-title">Get the look. Make it yours.</h2>
+        </div>
+        <div class="gallery-row">
+          <div class="gallery-row-head">
+            <h3><span class="dot dot-fashion" aria-hidden="true"></span>Tap a look to build a plan at your budget</h3>
+          </div>
+          <div class="gallery-grid" id="gallery-grid"></div>
+        </div>
+      </section>
     </section>
 
-    <section id="lookboard" class="card" hidden>
-      <div class="lb-head">
-        <h2>Lookboard</h2>
-        <button type="button" id="lb-download">Download image</button>
+    <!-- Step 2: result -->
+    <section id="result-view" class="view result-view" hidden aria-labelledby="result-title">
+      <div class="result-top">
+        <button id="back-to-search" class="btn btn-ghost btn-sm" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>
+          Back to search
+        </button>
+        <span class="step-pill step-pill-light">Step 2 of 2</span>
       </div>
-      <div class="lb" id="lb">
-        <div class="lb-photo"><img id="lb-photo" alt="Your photo"></div>
-        <div class="lb-items" id="lb-items"></div>
-        <div class="lb-side" id="lb-side" hidden></div>
+
+      <div class="result-head">
+        <div>
+          <p class="eyebrow" id="result-eyebrow">Plan ready</p>
+          <h1 id="result-title" tabindex="-1">Your plan.</h1>
+          <p class="result-sub" id="result-sub"></p>
+        </div>
       </div>
-      <div class="lb-total"><strong id="lb-total-val"></strong> <span id="lb-of"></span></div>
+      <div class="result-chips" id="result-chips"></div>
+
+      <article class="replan-card" id="replan-card">
+        <div class="replan-head">
+          <span class="replan-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><path d="m5.6 5.6 2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="2.4"/></svg>
+          </span>
+          <div>
+            <p class="replan-eyebrow">Budget</p>
+            <h3 id="replan-title"></h3>
+          </div>
+        </div>
+        <p class="replan-body" id="replan-body"></p>
+        <div class="replan-stats">
+          <div><span id="stat-total">$0</span><small>Plan total</small></div>
+          <div><span id="stat-usage">0%</span><small>Budget used</small></div>
+          <div><span id="stat-left">$0</span><small>Budget left</small></div>
+        </div>
+        <div class="budget-meter" aria-hidden="true"><span id="budget-meter-fill"></span></div>
+        <label class="slider-row">
+          <span>Change the budget: <strong id="slider-val"></strong></span>
+          <input type="range" id="slider" aria-label="Budget">
+        </label>
+        <p class="replan-msg" id="replan-msg" role="status"></p>
+      </article>
+
+      <section class="compare" aria-label="Your photo next to your cart">
+        <div class="compare-col">
+          <p class="compare-label">Your photo</p>
+          <div class="photo-frame"><div class="photo-boxes" id="photo-boxes">
+            <img id="result-photo" alt="The photo this plan was built from">
+          </div></div>
+        </div>
+        <div class="compare-col">
+          <div class="compare-label-row">
+            <p class="compare-label">Your cart</p>
+            <button id="download" class="btn btn-secondary btn-sm" type="button">Download image</button>
+          </div>
+          <div class="cart-board" id="cart-board"></div>
+        </div>
+      </section>
+
+      <div class="grid-head"><h3>Product matches</h3></div>
+      <div class="product-grid" id="product-grid"></div>
+
+      <section id="unmatched-section" hidden>
+        <div class="grid-head"><h3>No similar product found</h3></div>
+        <div class="unmatched-list" id="unmatched-list"></div>
+      </section>
+
+      <section id="left-out-section" hidden>
+        <div class="grid-head"><h3>Left out</h3></div>
+        <ul class="left-out" id="left-out"></ul>
+      </section>
+
+      <div class="result-footer">
+        <button id="new-search" class="btn btn-secondary" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>
+          Start another search
+        </button>
+      </div>
     </section>
 
-    <section id="result" class="card" hidden>
-      <div class="summary">
-        <div class="total"><span id="total"></span> <small id="of-budget"></small></div>
-      </div>
-      <p class="explain" id="explanation"></p>
-      <div class="agent-line" id="agent-line" hidden></div>
-      <label class="slider" id="slider-wrap">
-        <span>Change the budget: <strong id="slider-val"></strong> — the plan re-optimizes
-          over the same products, no new search.</span>
-        <input type="range" id="slider">
-      </label>
-      <p class="note-warn" id="note" hidden></p>
-    </section>
-
-    <section id="products" hidden>
-      <div class="grid" id="grid"></div>
-      <ul class="left-out" id="left-out"></ul>
-    </section>
+    <!-- Required notice, full text — do not remove without reading docs/setup.md, checkpoint 1. -->
+    <footer class="notice">
+      Built for AISUM Hackathon 2026. Signing in creates an account in a Google Cloud
+      project AISUM operates. Your searches are sent to AISUM's services to produce
+      results and are logged there against this app, not against your account. The team that built this app can see the email you sign in with.
+      <a href="https://aisum-hackathon.web.app/privacy">Privacy notice</a>
+    </footer>
   </main>
-
-  <footer class="notice">
-    Built for AISUM Hackathon 2026. Signing in creates an account in a Google Cloud
-    project AISUM operates. Your searches are sent to AISUM's services to produce
-    results and are logged there against this app, not against your account. The team that built this app can see the email you sign in with.
-    <a href="https://aisum-hackathon.web.app/privacy">Privacy notice</a>
-  </footer>
 </div>
 
+<div id="live" class="visually-hidden" aria-live="polite"></div>
 <script type="module" src="/static/auth.js"></script>
-<script type="module">
-const $ = (id) => document.getElementById(id);
-
-const EXAMPLES = {
-  desk: { scenario: 'desk', budget: 350,
-    url: 'https://images.unsplash.com/photo-1696710257827-75e2e5954059?w=1080&q=85&fm=jpg' },
-  outfit: { scenario: 'outfit', gender: 'F', budget: 150,
-    url: 'https://images.unsplash.com/photo-1758543144593-95061a3f418a?w=1080&q=85&fm=jpg' },
-  winter: { scenario: 'outfit', gender: 'F', budget: 150,
-    url: 'https://images.unsplash.com/photo-1652473291442-7a2e034a00d1?w=1080&q=85&fm=jpg' },
-};
-const REASONS = { over_budget: 'over budget', owned: 'you own it', no_candidates: 'nothing found',
-                  unmatched: 'no similar product found' };
-const SIZE_TEXT = { too_large: 'Too large for your desk', fits: 'Fits your desk (per title)',
-                    size_unverified: 'Size unverified', not_checked: 'Size from title' };
-
-let session = null;   // { id, budget, plan, scenario, image }
-let replanSeq = 0;    // drop replies to slider moves that were overtaken
-// session.pins {slot: p_key}: products the user chose from the alternatives; the
-// optimizer must keep them and fits the rest around them.
-
-function setStatus(text, state = '') { $('status').textContent = text; $('status').dataset.state = state; }
-const money = (n) => `$${Number(n).toFixed(2)}`;
-const label = (slot) => slot.replace(/_/g, ' ');
-
-async function api(path, body) {
-  const token = await window.__auth?.token();
-  if (!token) throw new Error('Sign in first.');
-  const r = await fetch(path, { method: 'POST', body: JSON.stringify(body),
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` } });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error || data.detail?.[0]?.msg || data.detail || `HTTP ${r.status}`);
-  return data;
-}
-
-function card(slot, p, change, before) {
-  const a = document.createElement('a');
-  a.className = 'product' + (change === 'replaced' || change === 'added' ? ' changed' : '');
-  if (/^https?:\/\//.test(p.click_url || '')) { a.href = p.click_url; a.target = '_blank'; a.rel = 'noopener'; }
-  if (change === 'replaced' || change === 'added') {
-    const b = document.createElement('span');
-    b.className = 'badge' + (change === 'added' ? ' added' : '');
-    b.textContent = change === 'added' ? 'Added' : 'Swapped';
-    a.append(b);
-  }
-  const img = document.createElement('img');
-  img.loading = 'lazy'; img.alt = ''; if (p.img_url) img.src = p.img_url;
-  const body = document.createElement('div'); body.className = 'body';
-  const s = document.createElement('span'); s.className = 'slot'; s.textContent = label(slot);
-  const n = document.createElement('span'); n.className = 'name'; n.textContent = p.product_name || '';
-  const pr = document.createElement('span'); pr.className = 'price'; pr.textContent = money(p.product_price);
-  body.append(s, n, pr);
-  if (change === 'replaced' && before) {
-    const w = document.createElement('span'); w.className = 'was';
-    w.textContent = `was ${money(before.product_price)} · ${(before.product_name || '').slice(0, 50)}`;
-    body.append(w);
-  }
-  a.append(img, body);
-  return a;
-}
-
-function render(data, changes = null, previous = {}) {
-  $('result').hidden = false; $('products').hidden = false;
-  renderLookboard(data, changes);
-  $('total').textContent = money(data.total);
-  $('of-budget').textContent = `of ${money(session.budget)} budget`;
-  $('explanation').textContent = data.explanation || '';
-  $('note').hidden = !data.note; $('note').textContent = data.note || '';
-
-  const grid = $('grid'); grid.replaceChildren();
-  for (const [slot, p] of Object.entries(data.plan)) {
-    const item = document.createElement('div'); item.className = 'item';
-    item.append(card(slot, p, changes?.[slot], previous[slot]));
-    if (session.pins?.[slot]) {
-      const pin = document.createElement('div'); pin.className = 'pinned';
-      const un = document.createElement('button'); un.type = 'button'; un.textContent = 'Unpin';
-      un.addEventListener('click', () => {
-        const pins = { ...session.pins }; delete pins[slot];
-        replanWith(session.budget, pins, `Unpinned ${label(slot)}.`);
-      });
-      pin.append('📌 Your pick', un);
-      item.append(pin);
-    }
-    const size = data.sizes?.[slot];
-    if (size) {
-      const tag = document.createElement('p'); tag.className = `size ${size.status}`;
-      tag.textContent = SIZE_TEXT[size.status] + (size.text ? ` · ${size.text}` : '');
-      item.append(tag);
-    }
-    const alts = data.alternatives?.[slot] || [];
-    if (alts.length) item.append(altsRow(slot, alts, 'Or:'));
-    grid.append(item);
-  }
-  // Items the photo shows but no close product was found for: not in the plan,
-  // their nearest products are offered to pin instead.
-  for (const d of (data.dropped || []).filter((x) => x.reason === 'unmatched')) {
-    const item = document.createElement('div'); item.className = 'item unmatched';
-    const head = document.createElement('p');
-    head.innerHTML = `<strong></strong> — no similar product found`;
-    head.querySelector('strong').textContent = label(d.slot);
-    item.append(head);
-    const alts = data.alternatives?.[d.slot] || [];
-    if (alts.length) item.append(altsRow(d.slot, alts, 'Closest:'));
-    grid.append(item);
-  }
-  const ul = $('left-out'); ul.replaceChildren();
-  for (const [slot, c] of Object.entries(changes || {})) {
-    if (c !== 'removed') continue;
-    const li = document.createElement('li'); li.className = 'removed';
-    li.textContent = `Removed: ${label(slot)} (${(previous[slot]?.product_name || '').slice(0, 60)})`;
-    ul.append(li);
-  }
-  const unfilled = new Set((data.infeasible || []).map((i) => i.slot));
-  for (const d of data.dropped || []) {
-    if (changes?.[d.slot] === 'removed' || d.reason === 'unmatched') continue;
-    const li = document.createElement('li');
-    li.textContent = `${unfilled.has(d.slot) ? 'Needed but not filled' : 'Left out'}: `
-      + `${label(d.slot)} — ${REASONS[d.reason] || d.reason}`;
-    ul.append(li);
-  }
-}
-
-function altsRow(slot, alts, title) {
-  const row = document.createElement('div'); row.className = 'alts';
-  row.append(title);
-  for (const { product: q } of alts) {
-    const b = document.createElement('button'); b.type = 'button';
-    b.title = `${q.product_name} · ${money(q.product_price)} — use this one`;
-    const im = document.createElement('img'); im.alt = q.product_name || ''; im.loading = 'lazy';
-    if (q.img_url) im.src = q.img_url;
-    b.append(im);
-    b.addEventListener('click', () => replanWith(session.budget,
-      { ...(session.pins || {}), [slot]: q.p_key }, `Swapped in ${label(slot)}: ${(q.product_name || '').slice(0, 40)}`));
-    row.append(b);
-  }
-  return row;
-}
-
-function setupSlider(budget) {
-  const s = $('slider');
-  s.min = Math.max(5, Math.round(budget * 0.3 / 5) * 5);
-  s.max = Math.round(budget * 1.5 / 5) * 5;
-  s.step = 5; s.value = budget;
-  $('slider-val').textContent = money(budget);
-}
-
-$('plan-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const budget = Number($('budget').value);
-  const requested = $('scenario').value;
-  if (!requested) { setStatus('Choose a category: Outfit, Desk or Room.', 'error'); return; }
-  if (requested === 'outfit' && !$('gender').value) {
-    setStatus('Choose who the outfit is for: Women, Men or Unisex.', 'error'); return;
-  }
-  const width = Number($('desk-width').value);
-  const body = { image_url: $('image-url').value.trim(), scenario: requested, budget,
-                 gender: requested === 'outfit' ? $('gender').value : null,
-                 ...(requested === 'desk' && width > 0
-                   ? { desk_width: width, desk_width_unit: $('desk-unit').value } : {}) };
-  $('go').disabled = true;
-  setStatus(requested === 'outfit' ? 'Finding each item in the photo… (up to 12 seconds)'
-            : 'Reading the photo, searching and checking products… this takes up to a minute.');
-  const t0 = performance.now();
-  try {
-    const data = await api('/api/plan', body);
-    session = { id: data.session_id, budget, plan: data.plan, scenario: data.scenario, pins: {},
-                image: data.original_image || body.image_url,
-                layers: Object.fromEntries(data.slots.map((s) => [s.slot, s.layer])) };
-    renderAgentLine(data.report?._review);
-    setupSlider(budget);
-    render(data);
-    setStatus(`Done in ${((performance.now() - t0) / 1000).toFixed(1)}s · ${data.slots.length} items looked for.`);
-  } catch (err) {
-    setStatus(err.message, 'error');
-  } finally {
-    $('go').disabled = false;
-  }
-});
-
-$('slider').addEventListener('input', (e) => { $('slider-val').textContent = money(e.target.value); });
-// One re-plan for the slider, a swap from the alternatives, or an unpin.
-async function replanWith(budget, pins, doneText = null) {
-  if (!session) return;
-  const seq = ++replanSeq;
-  setStatus(`Re-optimizing for ${money(budget)}…`);
-  try {
-    const data = await api('/api/replan', { session_id: session.id, budget, pin: pins });
-    if (seq !== replanSeq) return;
-    const previous = session.plan;
-    session = { ...session, budget, plan: data.plan, pins: data.pins || {},
-                image: data.original_image || session.image };
-    render(data, data.changes, previous);
-    const n = Object.values(data.changes).filter((c) => c !== 'unchanged').length;
-    const bad = (data.infeasible || []).filter((i) => pins[i.slot]).map((i) => label(i.slot));
-    setStatus(bad.length ? `Your pick for ${bad.join(', ')} does not fit this budget.`
-      : doneText || (n ? `${n} item${n > 1 ? 's' : ''} changed.` : 'Nothing changed at this budget.'),
-      bad.length ? 'error' : '');
-  } catch (err) {
-    if (seq === replanSeq) setStatus(err.message, 'error');
-  }
-}
-$('slider').addEventListener('change', (e) => replanWith(Number(e.target.value), session?.pins || {}));
-
-for (const b of document.querySelectorAll('[data-example]')) {
-  b.addEventListener('click', () => {
-    const ex = EXAMPLES[b.dataset.example];
-    $('scenario').value = ex.scenario; $('budget').value = ex.budget; setImage(ex.url);
-    if (ex.gender) $('gender').value = ex.gender;
-    showGender();
-    showGender();
-  });
-}
-
-// ── Image upload: button, drag and drop, paste ─────────────────────────
-const MAX_UPLOAD = 8 * 1024 * 1024;
-
-function setImage(url) {
-  $('image-url').value = url;
-  $('preview').hidden = !url;
-  if (url) $('preview').src = url;
-}
-$('image-url').addEventListener('change', (e) => setImage(e.target.value.trim()));
-$('preview').addEventListener('error', () => { $('preview').hidden = true; });
-
-async function uploadFile(file) {
-  if (!file) return;
-  if (!['image/jpeg', 'image/png'].includes(file.type)) {
-    setStatus('Only JPG and PNG images can be uploaded.', 'error'); return;
-  }
-  if (file.size > MAX_UPLOAD) { setStatus('The image is larger than 8 MB.', 'error'); return; }
-  const token = await window.__auth?.token();
-  if (!token) { setStatus('Sign in first.', 'error'); return; }
-  $('drop').classList.add('busy');
-  setStatus(`Uploading ${(file.size / 1024 / 1024).toFixed(1)} MB…`);
-  try {
-    const r = await fetch('/api/upload', { method: 'POST', body: file,
-      headers: { 'Content-Type': file.type, Authorization: `Bearer ${token}` } });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.error || `Upload failed (HTTP ${r.status})`);
-    setImage(data.url);
-    setStatus('Uploaded. Pick a category and budget, then generate the plan.');
-  } catch (err) {
-    setStatus(err.message, 'error');
-  } finally {
-    $('drop').classList.remove('busy');
-  }
-}
-
-$('pick').addEventListener('click', () => $('file').click());
-$('file').addEventListener('change', (e) => { uploadFile(e.target.files[0]); e.target.value = ''; });
-for (const ev of ['dragenter', 'dragover']) {
-  $('drop').addEventListener(ev, (e) => { e.preventDefault(); $('drop').classList.add('over'); });
-}
-for (const ev of ['dragleave', 'drop']) {
-  $('drop').addEventListener(ev, (e) => { e.preventDefault(); $('drop').classList.remove('over'); });
-}
-$('drop').addEventListener('drop', (e) => uploadFile(e.dataTransfer.files[0]));
-// Paste anywhere on the page, unless the user is pasting text into a field.
-document.addEventListener('paste', (e) => {
-  const item = [...(e.clipboardData?.items || [])].find((i) => i.kind === 'file' && i.type.startsWith('image/'));
-  if (!item) return;
-  e.preventDefault();
-  uploadFile(item.getAsFile());
-});
-
-// ── Gender (outfit only; the user's own choice, never guessed) ─────────
-// Category is always the user's choice; outfits also need Women / Men / Unisex.
-function showGender() {
-  const v = $('scenario').value;
-  $('gender-wrap').hidden = v !== 'outfit';
-  $('gender').required = v === 'outfit';
-  $('width-wrap').hidden = v !== 'desk';
-}
-
-// What the outfit review changed: the items it added and the descriptions it fixed.
-function renderAgentLine(review) {
-  const box = $('agent-line'); box.replaceChildren();
-  const added = review?.added || [], fixed = review?.corrected || [],
-        removed = review?.removed || [];
-  box.hidden = !(added.length || fixed.length || removed.length);
-  if (box.hidden) return;
-  const head = document.createElement('strong');
-  head.textContent = `The agent added ${added.length} item${added.length === 1 ? '' : 's'} `
-    + `and corrected ${fixed.length} description${fixed.length === 1 ? '' : 's'}.`;
-  const ul = document.createElement('ul');
-  for (const a of added) {
-    const li = document.createElement('li');
-    li.textContent = `Added ${label(a.slot)}: ${a.query}`;
-    ul.append(li);
-  }
-  for (const r of removed) {
-    const li = document.createElement('li');
-    li.textContent = `Left out ${label(r.slot)} ("${r.was}"): not worn in the photo`;
-    ul.append(li);
-  }
-  for (const c of fixed) {
-    const li = document.createElement('li');
-    li.textContent = `${label(c.slot)}: "${c.from}" → "${c.to}"`;
-    ul.append(li);
-  }
-  box.append(head, ul);
-}
-$('scenario').addEventListener('change', showGender);
-showGender();
-
-// ── Lookboard ─────────────────────────────────────────────────────────
-// Where each slot sits on the board, top to toe. Checked in this order; anything
-// unmatched counts as an accessory and goes in the top row.
-const ZONES = [
-  ['side', /bag|tote|purse|backpack|clutch|wallet/],
-  ['feet', /shoe|sneaker|boot|heel|sandal|loafer|flat|slipper|mule|clog|sock/],
-  ['bottom', /pant|jean|trouser|skirt|short|legging|jogger/],
-  ['top', /coat|jacket|blazer|cardigan|sweater|hoodie|shirt|top|blouse|tee|vest|dress|jumpsuit|parka|outer/],
-  ['head', /hat|cap|beanie|beret|fedora|glass|earring|necklace|scarf|tie|jewel|watch|bracelet|belt/],
-];
-const ROWS = ['head', 'top', 'bottom', 'feet'];
-// Items the review added carry a layer; it is more reliable than the slot name.
-const LAYER_ZONE = { headwear: 'head', accessory: 'head', inner: 'top', mid: 'top',
-  outer: 'top', top: 'top', dress: 'top', bottom: 'bottom', footwear: 'feet',
-  socks: 'feet', bag: 'side' };
-const zoneOf = (slot) => LAYER_ZONE[session?.layers?.[slot]]
-  || (ZONES.find(([, re]) => re.test(slot)) || ['head'])[0];
-
-function boardLayout(plan) {
-  const zones = { head: [], top: [], bottom: [], feet: [], side: [] };
-  for (const [slot, p] of Object.entries(plan)) zones[zoneOf(slot)].push([slot, p]);
-  return zones;
-}
-
-function lbItem(slot, p, changed) {
-  const a = document.createElement('a');
-  a.className = 'lb-item' + (changed ? ' changed' : '');
-  if (/^https?:\/\//.test(p.click_url || '')) { a.href = p.click_url; a.target = '_blank'; a.rel = 'noopener'; }
-  const img = document.createElement('img'); img.alt = label(slot); img.loading = 'lazy';
-  if (p.img_url) img.src = p.img_url;
-  const t = document.createElement('span'); t.textContent = label(slot);
-  const pr = document.createElement('span'); pr.className = 'price'; pr.textContent = money(p.product_price);
-  a.append(img, t, pr);
-  return a;
-}
-
-function renderLookboard(data, changes) {
-  const on = session?.scenario === 'outfit';
-  $('lookboard').hidden = !on;
-  if (!on) return;
-  if ($('lb-photo').src !== session.image) $('lb-photo').src = session.image;
-  const zones = boardLayout(data.plan);
-  const isChanged = (slot) => ['replaced', 'added'].includes(changes?.[slot]);
-  const items = $('lb-items'); items.replaceChildren();
-  for (const z of ROWS) {
-    if (!zones[z].length) continue;
-    const row = document.createElement('div'); row.className = 'lb-row';
-    for (const [slot, p] of zones[z]) row.append(lbItem(slot, p, isChanged(slot)));
-    items.append(row);
-  }
-  const side = $('lb-side'); side.replaceChildren();
-  for (const [slot, p] of zones.side) side.append(lbItem(slot, p, isChanged(slot)));
-  side.hidden = !zones.side.length;
-  $('lb').classList.toggle('has-side', zones.side.length > 0);
-  $('lb-total-val').textContent = money(data.total);
-  $('lb-of').textContent = `of ${money(session.budget)} budget`;
-}
-
-// Product images send no CORS headers, so drawing them directly would taint the canvas.
-// They come through /api/lookboard-image, which only serves this session's own images.
-async function boardImage(slot) {
-  const token = await window.__auth?.token();
-  const r = await fetch(`/api/lookboard-image?session_id=${encodeURIComponent(session.id)}`
-                        + `&slot=${encodeURIComponent(slot)}`,
-                        { headers: { Authorization: `Bearer ${token}` } });
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
-  return createImageBitmap(await r.blob());
-}
-
-function drawContain(ctx, img, x, y, w, h) {
-  const k = Math.min(w / img.width, h / img.height);
-  const dw = img.width * k, dh = img.height * k;
-  ctx.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
-}
-
-async function downloadBoard() {
-  if (!session) return;
-  const btn = $('lb-download'); btn.disabled = true;
-  setStatus('Building the Lookboard image…');
-  try {
-    const W = 1200, H = 900, PAD = 40, TOP = 90, BOTTOM = 90;
-    const zones = boardLayout(session.plan);
-    const rows = ROWS.filter((z) => zones[z].length);
-    const hasSide = zones.side.length > 0;
-    const photoW = 520, itemsX = PAD + photoW + 30;
-    const itemsW = (hasSide ? W - 200 - PAD : W - PAD) - itemsX;
-    const slots = ['_photo', ...Object.keys(session.plan)];
-    const imgs = Object.fromEntries(await Promise.all(slots.map(async (s) => {
-      try { return [s, await boardImage(s)]; } catch { return [s, null]; }   // a missing image leaves a blank tile
-    })));
-
-    const c = Object.assign(document.createElement('canvas'), { width: W, height: H });
-    const ctx = c.getContext('2d');
-    ctx.fillStyle = '#FAFAF9'; ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = '#1C1917'; ctx.font = '700 34px system-ui, sans-serif';
-    ctx.fillText('GhostCart Lookboard', PAD, 58);
-
-    const areaH = H - TOP - BOTTOM;
-    ctx.fillStyle = '#F0EFEE'; ctx.fillRect(PAD, TOP, photoW, areaH);
-    if (imgs._photo) drawContain(ctx, imgs._photo, PAD, TOP, photoW, areaH);
-
-    const tile = (slot, p, x, y, w, h) => {
-      const ih = h - 40;
-      ctx.fillStyle = '#FFFFFF'; ctx.fillRect(x, y, w, ih);
-      ctx.strokeStyle = '#E7E5E4'; ctx.lineWidth = 2; ctx.strokeRect(x, y, w, ih);
-      if (imgs[slot]) drawContain(ctx, imgs[slot], x + 6, y + 6, w - 12, ih - 12);
-      ctx.fillStyle = '#57534E'; ctx.font = '15px system-ui, sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText(label(slot), x + w / 2, y + ih + 17);
-      ctx.fillStyle = '#1C1917'; ctx.font = '700 16px system-ui, sans-serif';
-      ctx.fillText(money(p.product_price), x + w / 2, y + ih + 36);
-      ctx.textAlign = 'left';
-    };
-    const rowH = rows.length ? areaH / rows.length : 0;
-    rows.forEach((z, r) => {
-      const n = zones[z].length, gap = 14;
-      const w = Math.min((itemsW - gap * (n - 1)) / n, rowH - 50);
-      const start = itemsX + (itemsW - (w * n + gap * (n - 1))) / 2;
-      zones[z].forEach(([slot, p], i) => tile(slot, p, start + i * (w + gap), TOP + r * rowH + 5, w, rowH - 10));
-    });
-    if (hasSide) {
-      const n = zones.side.length, h = Math.min(areaH / n, 220);
-      zones.side.forEach(([slot, p], i) => tile(slot, p, W - PAD - 170, TOP + i * h, 170, h - 10));
-    }
-    ctx.fillStyle = '#1C1917'; ctx.font = '700 32px system-ui, sans-serif';
-    const total = money(Object.values(session.plan).reduce((t, p) => t + Number(p.product_price || 0), 0));
-    ctx.fillText(total, PAD, H - 36);
-    const tw = ctx.measureText(total).width;
-    ctx.fillStyle = '#57534E'; ctx.font = '20px system-ui, sans-serif';
-    ctx.fillText(`of ${money(session.budget)} budget`, PAD + tw + 12, H - 36);
-
-    const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
-    const a = Object.assign(document.createElement('a'),
-                            { href: URL.createObjectURL(blob), download: 'ghostcart-lookboard.png' });
-    document.body.append(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    const missing = slots.filter((s) => !imgs[s]).length;
-    setStatus(missing ? `Lookboard saved; ${missing} image(s) could not be loaded and are blank.`
-                      : 'Lookboard saved as ghostcart-lookboard.png.');
-  } catch (err) {
-    setStatus(`Could not build the image: ${err.message}`, 'error');
-  } finally {
-    btn.disabled = false;
-  }
-}
-$('lb-download').addEventListener('click', downloadBoard);
-</script>
+<script type="module" src="/static/ghostcart.js"></script>
 </body>
 </html>

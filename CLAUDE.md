@@ -50,7 +50,8 @@ Desk / Room：DeepSeek 看图拆清单 → 文字搜索 → 每个 slot 一次 L
 
 ## 页面
 
-- `/ghostcart` 用 Yining 的样式（`static/style.css`，`/` 和批量页也共用）；`/classic` 是合并前的页面（`static/classic.html` + `classic.css`），功能相同，作兜底。
+- `/ghostcart` 是 Yining `ui-design-v1` 的设计接上真实接口（`static/ghostcart.html`、`ghostcart.js`、`styles.css`，数据来自 `?format=ui`）。框选、左右对比和未匹配列表是按她的样式新做的；她分支的 `test_data.js` 是带照片的批量导出，没有合并。
+- `/classic` 是旧页面（`static/classic.html` + `classic.css`），功能相同，作兜底。`/` 和批量页仍用 `static/style.css`。
 
 ## 比赛
 
