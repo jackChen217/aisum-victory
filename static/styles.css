@@ -1215,13 +1215,12 @@ body:not(.gated) #gate { display: none; }
 .unmatched-text { color: var(--text-2); font-size: 13px; }
 .left-out { margin: 0; padding-left: 18px; color: var(--text-2); font-size: 13px; }
 
-@media (max-width: 900px) {
-  .compare { grid-template-columns: 1fr; }
-}
 @media (max-width: 760px) {
+  .compare { grid-template-columns: 1fr; }
   .gallery-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .gate { margin: 20px 0; padding: 26px; }
   .gate h1 { font-size: 34px; }
 }
 .compare-label-row { margin-bottom: 12px; }
 .compare-label-row .compare-label { margin-bottom: 0; }
+.site-header { justify-content: space-between; }
