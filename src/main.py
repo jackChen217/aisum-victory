@@ -59,8 +59,20 @@ async def lifespan(app: FastAPI):
     await app.state.mcp.aclose()
 
 
+# Cloud Run's source build stamps every file 1980, so without this browsers treat
+# pages and scripts as fresh for a very long time and keep old versions after a deploy.
+REVALIDATE = {"Cache-Control": "no-cache"}
+
+
+class RevalidatedStatic(StaticFiles):
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers.update(REVALIDATE)
+        return response
+
+
 app = FastAPI(title="AISUM Hackathon Starter Kit", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory=STATIC), name="static")
+app.mount("/static", RevalidatedStatic(directory=STATIC), name="static")
 
 
 def _mcp_error(e: McpError, **extra) -> JSONResponse:
@@ -78,13 +90,13 @@ async def index():
 
 @app.get("/ghostcart")
 async def ghostcart():
-    return FileResponse(STATIC / "ghostcart.html")
+    return FileResponse(STATIC / "ghostcart.html", headers=REVALIDATE)
 
 
 @app.get("/classic")
 async def classic():
     """The previous look of /ghostcart, same features and API."""
-    return FileResponse(STATIC / "classic.html")
+    return FileResponse(STATIC / "classic.html", headers=REVALIDATE)
 
 
 @app.get("/ghostcart/batch")
