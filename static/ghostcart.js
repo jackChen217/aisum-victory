@@ -489,6 +489,8 @@ async function downloadBoard() {
     const tw = ctx.measureText(total).width;
     ctx.fillStyle = '#475569'; ctx.font = '20px system-ui, sans-serif';
     ctx.fillText(`of ${money(data.budget)} budget`, PAD + tw + 12, H - 36);
+    ctx.fillStyle = '#475569'; ctx.font = '16px system-ui, sans-serif';
+    ctx.textAlign = 'right'; ctx.fillText('Powered by AISUM', W - PAD, H - 36); ctx.textAlign = 'left';
 
     const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
     const a = el('a', { href: URL.createObjectURL(blob), download: 'ghostcart-lookboard.png' });

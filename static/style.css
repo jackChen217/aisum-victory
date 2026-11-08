@@ -1381,3 +1381,7 @@ body label select {
     scroll-behavior: auto !important;
   }
 }
+
+/* Attribution, text only: no AISUM logo (we have no permission to use it). Outside
+   #app so it also shows on the sign-in page. */
+.aisum-credit { margin: 24px 0 32px; font-size: 14px; line-height: 1.6; color: var(--text, #334155); }

@@ -220,6 +220,7 @@
     </section>
 
     <section id="products" hidden>
+      <p class="aisum-badge">Product results powered by AISUM</p>
       <div class="grid" id="grid"></div>
       <ul class="left-out" id="left-out"></ul>
     </section>
@@ -231,6 +232,7 @@
     results and are logged there against this app, not against your account. The team that built this app can see the email you sign in with.
     <a href="https://aisum-hackathon.web.app/privacy">Privacy notice</a>
   </footer>
+  <p class="aisum-credit">Product search powered by AISUM. Thanks to AISUM for the product-search tools that make GhostCart possible.</p>
 </div>
 
 <script type="module" src="/static/auth.js"></script>
@@ -668,6 +670,8 @@ async function downloadBoard() {
     const tw = ctx.measureText(total).width;
     ctx.fillStyle = '#57534E'; ctx.font = '20px system-ui, sans-serif';
     ctx.fillText(`of ${money(session.budget)} budget`, PAD + tw + 12, H - 36);
+    ctx.fillStyle = '#475569'; ctx.font = '16px system-ui, sans-serif';
+    ctx.textAlign = 'right'; ctx.fillText('Powered by AISUM', W - PAD, H - 36); ctx.textAlign = 'left';
 
     const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
     const a = Object.assign(document.createElement('a'),

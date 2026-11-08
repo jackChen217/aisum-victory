@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=2">
+<link rel="stylesheet" href="/static/styles.css?v=3">
 </head>
 <body class="gated">
 <div class="page">
@@ -206,7 +206,7 @@
         </div>
       </section>
 
-      <div class="grid-head"><h3>Product matches</h3></div>
+      <div class="grid-head grid-head-aisum"><h3>Product matches</h3><p class="aisum-badge">Product results powered by AISUM</p></div>
       <div class="product-grid" id="product-grid"></div>
 
       <section id="unmatched-section" hidden>
@@ -235,10 +235,11 @@
       <a href="https://aisum-hackathon.web.app/privacy">Privacy notice</a>
     </footer>
   </main>
+  <p class="aisum-credit">Product search powered by AISUM. Thanks to AISUM for the product-search tools that make GhostCart possible.</p>
 </div>
 
 <div id="live" class="visually-hidden" aria-live="polite"></div>
 <script type="module" src="/static/auth.js"></script>
-<script type="module" src="/static/ghostcart.js?v=2"></script>
+<script type="module" src="/static/ghostcart.js?v=3"></script>
 </body>
 </html>
