@@ -81,6 +81,12 @@ async def ghostcart():
     return FileResponse(STATIC / "ghostcart.html")
 
 
+@app.get("/classic")
+async def classic():
+    """The previous look of /ghostcart, same features and API."""
+    return FileResponse(STATIC / "classic.html")
+
+
 @app.get("/ghostcart/batch")
 async def ghostcart_batch():
     return FileResponse(STATIC / "ghostcart-batch.html")
