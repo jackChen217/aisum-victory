@@ -1225,8 +1225,5 @@ body:not(.gated) #gate { display: none; }
 .compare-label-row .compare-label { margin-bottom: 0; }
 .site-header { justify-content: space-between; }
 
-/* Attribution, text only: no AISUM logo (we have no permission to use it). Outside
-   #app so it also shows on the sign-in page. */
-.aisum-credit { max-width: 1120px; margin: 24px auto 32px; padding: 0 24px; font-size: 14px; line-height: 1.6; color: var(--text, #334155); }
 .grid-head-aisum { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
 .aisum-badge { margin: 0; padding: 6px 14px; border: 1px solid var(--border); border-radius: 999px; font-size: 16px; font-weight: 600; }

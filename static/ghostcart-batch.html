@@ -23,8 +23,8 @@ label{display:grid;gap:5px;font-size:14px}input,select{font:inherit;padding:9px;
 </head>
 <body class="gated"><div class="wrap">
 <header class="top"><div><a href="/ghostcart">← 单张调整页面</a><h1>批量效果测试</h1><p class="lede">选最多 10 张图，逐张生成，直接看哪里像、哪里不像。</p><p class="version">测试版本：A 原始第一名 / B 仅价格上限第一名 / C 实验增强与整套预算（v2）</p></div><div class="who"><span id="whoami" hidden></span><button id="signout" hidden>Sign out</button></div></header>
-<p class="notice-line">Your searches are sent to AISUM's services and logged against this app, not against your account. The team that built this app can see the email you sign in with. <a href="https://aisum-hackathon.web.app/privacy">Privacy notice</a></p>
-<section id="gate" class="card gate"><button id="gate-signin" class="primary">Sign in with Google</button><p class="notice-consent">Built for AISUM Hackathon 2026. Signing in creates an account in a Google Cloud project AISUM operates. Your searches are sent to AISUM's services to produce results and are logged there against this app, not against your account. The team that built this app can see the email you sign in with. <a href="https://aisum-hackathon.web.app/privacy">Privacy notice</a></p><p id="gate-err" class="err" hidden></p></section>
+<p class="notice-line">Your searches are sent to AISUM's services and logged against this app, not against your account. The team that built this app can see the email you sign in with. <a href="https://aisum-hackathon.web.app/privacy">Privacy notice</a><br>Product search powered by AISUM — thanks for the tools that make GhostCart possible.</p>
+<section id="gate" class="card gate"><button id="gate-signin" class="primary">Sign in with Google</button><p class="notice-consent">Built for AISUM Hackathon 2026. Signing in creates an account in a Google Cloud project AISUM operates. Your searches are sent to AISUM's services to produce results and are logged there against this app, not against your account. The team that built this app can see the email you sign in with. <a href="https://aisum-hackathon.web.app/privacy">Privacy notice</a><br>Product search powered by AISUM — thanks for the tools that make GhostCart possible.</p><p id="gate-err" class="err" hidden></p></section>
 <main id="app"><p id="autherr" class="err" hidden></p>
 <section class="card"><div class="controls">
 <label>测试方式<select id="test-mode"><option value="triple">穿搭四组对照 A / B / C / D</option><option value="single">旧版单组（穿搭或桌面）</option></select></label>
@@ -36,4 +36,4 @@ label{display:grid;gap:5px;font-size:14px}input,select{font:inherit;padding:9px;
 <p id="status" role="status" aria-live="polite">先选择图片。</p><div id="queue" class="queue"></div>
 <details><summary>本浏览器的测试记录</summary><p class="meta">按当前登录账号保存最近 5 批原图预览和商品结果，刷新后可以查看。清除浏览器数据会删除记录；商品图链接或导出会话可能过期，建议本批完成后下载对比图和 JSON 留存。</p><div id="history" class="history"></div><button id="clear-history">删除我的本地测试记录</button></details>
 </section><div id="results"></div>
-</main><p class="aisum-credit">Product search powered by AISUM. Thanks to AISUM for the product-search tools that make GhostCart possible.</p></div><script type="module" src="/static/auth.js"></script><script type="module" src="/static/ghostcart-batch.js"></script></body></html>
+</main></div><script type="module" src="/static/auth.js"></script><script type="module" src="/static/ghostcart-batch.js"></script></body></html>

@@ -156,7 +156,4 @@ pre.result {
   .check dd { margin-bottom: 10px; }
 }
 
-/* Attribution, text only: no AISUM logo (we have no permission to use it). Outside
-   #app so it also shows on the sign-in page. */
-.aisum-credit { margin: 24px 0 32px; font-size: 14px; line-height: 1.6; color: var(--text, #334155); }
 .aisum-badge { margin: 0 0 12px; font-size: 16px; font-weight: 600; }
