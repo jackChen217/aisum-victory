@@ -32,7 +32,7 @@ from typing import Literal
 
 import httpx
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
@@ -82,6 +82,12 @@ def _mcp_error(e: McpError, **extra) -> JSONResponse:
 
 
 # ── Page and Firebase config (no sign-in needed) ─────────────────────────
+
+# WeChat's domain appeal checks for this one file at the site root.
+@app.get("/102905f7b945d56af40e18fb57d9d994.txt", include_in_schema=False)
+def wechat_verification() -> PlainTextResponse:
+    return PlainTextResponse("49660d71b2a5f9874ff53248f7bb5402979df318")
+
 
 @app.get("/")
 async def index():
