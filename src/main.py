@@ -85,7 +85,7 @@ def _mcp_error(e: McpError, **extra) -> JSONResponse:
 
 @app.get("/")
 async def index():
-    return FileResponse(STATIC / "index.html")
+    return FileResponse(STATIC / "index.html", headers=REVALIDATE)
 
 
 @app.get("/ghostcart")
@@ -101,7 +101,7 @@ async def classic():
 
 @app.get("/ghostcart/batch")
 async def ghostcart_batch():
-    return FileResponse(STATIC / "ghostcart-batch.html")
+    return FileResponse(STATIC / "ghostcart-batch.html", headers=REVALIDATE)
 
 
 @app.get("/api/firebase-config")
