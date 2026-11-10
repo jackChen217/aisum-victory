@@ -12,31 +12,29 @@ import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.4.0/firebas
 import {
   getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged,
 } from 'https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js';
+import { signInMessage } from '/static/authmsg.js';
 
 const $ = (id) => document.getElementById(id);
 
-// The one sign-in error students actually hit is auth/unauthorized-domain, and what to do
-// about it depends on which address the page was opened at, so say it where it shows up.
-function hint(e) {
-  if (!e || e.code !== 'auth/unauthorized-domain') return '';
-  const host = location.hostname;
-  if (host === 'localhost') return '';
-  if (host.endsWith('.run.app')) {
-    return ` | ${location.host} is not on the sign-in list yet. The organizers add Cloud Run ` +
-           'addresses; if this stays after a while, send them this address.';
-  }
-  return ` | Sign-in is not allowed on ${location.host}. Open http://localhost:8000 in your ` +
-         'browser. 127.0.0.1, and addresses that VS Code port forwarding or a tunnel gives ' +
-         'you, do not work.';
-}
-
-function fail(where, e) {
-  const msg = `auth ${where}: ${e.code || e.message}${hint(e)}`;
+function showError(text) {
   for (const id of ['autherr', 'gate-err']) {
     const el = $(id);
-    if (el) { el.hidden = false; el.textContent = msg; }
+    if (!el) continue;
+    el.hidden = !text;
+    el.textContent = text || '';
   }
-  console.error('[auth]', where, e);
+}
+
+// Users see a plain sentence (or nothing, for a cancelled or closed popup); the
+// Firebase code goes to the console only. See authmsg.js.
+function fail(where, e) {
+  const text = signInMessage(e, location);
+  if (text === null) {
+    console.debug('[auth]', where, e && e.code);
+    return;
+  }
+  showError(text);
+  console.error('[auth]', where, (e && e.code) || e, e);
 }
 
 async function main() {
@@ -65,7 +63,15 @@ async function main() {
     window.dispatchEvent(new CustomEvent('authchange', { detail: { user } }));
   }, (e) => fail('state', e));
 
+  const button = $('gate-signin');
+  let popupOpen = false;
+
+  // Disabled while the popup is open: a second click would cancel the first popup.
   async function signIn() {
+    if (popupOpen) return;
+    popupOpen = true;
+    button.disabled = true;
+    showError('');
     try {
       await signInWithPopup(auth, new GoogleAuthProvider());
     } catch (e) {
@@ -75,10 +81,13 @@ async function main() {
       // often because the page was opened as 127.0.0.1:8000, which is not on it by
       // default. localhost:8000 is.
       fail('signin', e);
+    } finally {
+      popupOpen = false;
+      button.disabled = false;
     }
   }
 
-  $('gate-signin').addEventListener('click', signIn);
+  button.addEventListener('click', signIn);
   $('signout').addEventListener('click', () => signOut(auth));
 }
 
