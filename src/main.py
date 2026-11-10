@@ -25,14 +25,17 @@ GhostCart (src/agent/, page at /ghostcart):
                        page can export the Lookboard canvas as PNG
 """
 import asyncio
+import hashlib
 import json
+import re
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Literal
 
 import httpx
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
@@ -71,6 +74,29 @@ class RevalidatedStatic(StaticFiles):
         return response
 
 
+def asset_version(directory: Path) -> str:
+    """Short hash of every script and stylesheet under `directory`: it changes exactly
+    when one of them does, so each deploy gets new asset URLs without editing a number.
+    (.git is not uploaded to Cloud Run, so there is no commit hash to use.)"""
+    digest = hashlib.sha256()
+    for path in sorted(directory.rglob("*")):
+        if path.suffix in (".js", ".css") and path.is_file():
+            digest.update(path.relative_to(directory).as_posix().encode() + b"\0")
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:10]
+
+
+ASSET_VERSION = asset_version(STATIC)
+# Our own scripts and stylesheets in a page: src="/static/x.js" or href="/static/x.css".
+_ASSET_REF = re.compile(r'((?:src|href)="/static/[^"?#]+\.(?:js|css))(?:\?v=[^"]*)?"')
+
+
+def page(name: str) -> HTMLResponse:
+    """A page with ?v=<ASSET_VERSION> on every /static script and stylesheet."""
+    html = (STATIC / name).read_text(encoding="utf-8")
+    return HTMLResponse(_ASSET_REF.sub(rf'\1?v={ASSET_VERSION}"', html), headers=REVALIDATE)
+
+
 app = FastAPI(title="AISUM Hackathon Starter Kit", lifespan=lifespan)
 app.mount("/static", RevalidatedStatic(directory=STATIC), name="static")
 
@@ -91,23 +117,23 @@ def wechat_verification() -> PlainTextResponse:
 
 @app.get("/")
 async def index():
-    return FileResponse(STATIC / "index.html", headers=REVALIDATE)
+    return page("index.html")
 
 
 @app.get("/ghostcart")
 async def ghostcart():
-    return FileResponse(STATIC / "ghostcart.html", headers=REVALIDATE)
+    return page("ghostcart.html")
 
 
 @app.get("/classic")
 async def classic():
     """The previous look of /ghostcart, same features and API."""
-    return FileResponse(STATIC / "classic.html", headers=REVALIDATE)
+    return page("classic.html")
 
 
 @app.get("/ghostcart/batch")
 async def ghostcart_batch():
-    return FileResponse(STATIC / "ghostcart-batch.html", headers=REVALIDATE)
+    return page("ghostcart-batch.html")
 
 
 @app.get("/api/firebase-config")
