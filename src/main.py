@@ -109,29 +109,34 @@ def _mcp_error(e: McpError, **extra) -> JSONResponse:
 
 # ── Page and Firebase config (no sign-in needed) ─────────────────────────
 
+# HEAD too: uptime checks, link previews and `curl -I` send HEAD, and FastAPI's
+# @app.get answers it with 405.
+PAGE_METHODS = ["GET", "HEAD"]
+
+
 # WeChat's domain appeal checks for this one file at the site root.
-@app.get("/102905f7b945d56af40e18fb57d9d994.txt", include_in_schema=False)
+@app.api_route("/102905f7b945d56af40e18fb57d9d994.txt", methods=PAGE_METHODS, include_in_schema=False)
 def wechat_verification() -> PlainTextResponse:
     return PlainTextResponse("49660d71b2a5f9874ff53248f7bb5402979df318")
 
 
-@app.get("/")
+@app.api_route("/", methods=PAGE_METHODS)
 async def index():
     return page("index.html")
 
 
-@app.get("/ghostcart")
+@app.api_route("/ghostcart", methods=PAGE_METHODS)
 async def ghostcart():
     return page("ghostcart.html")
 
 
-@app.get("/classic")
+@app.api_route("/classic", methods=PAGE_METHODS)
 async def classic():
     """The previous look of /ghostcart, same features and API."""
     return page("classic.html")
 
 
-@app.get("/ghostcart/batch")
+@app.api_route("/ghostcart/batch", methods=PAGE_METHODS)
 async def ghostcart_batch():
     return page("ghostcart-batch.html")
 

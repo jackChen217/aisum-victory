@@ -15,3 +15,10 @@ def test_no_other_root_file_is_served():
     client = TestClient(main.app)
     assert client.get("/other.txt").status_code == 404
     assert client.get("/.env").status_code == 404
+
+
+def test_verification_file_answers_head():
+    r = TestClient(main.app).head("/102905f7b945d56af40e18fb57d9d994.txt")
+    assert r.status_code == 200
+    assert r.content == b""
+    assert r.headers["content-type"].startswith("text/plain")
