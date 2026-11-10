@@ -18,7 +18,9 @@ def test_no_other_root_file_is_served():
 
 
 def test_verification_file_answers_head():
-    r = TestClient(main.app).head("/102905f7b945d56af40e18fb57d9d994.txt")
-    assert r.status_code == 200
-    assert r.content == b""
-    assert r.headers["content-type"].startswith("text/plain")
+    client = TestClient(main.app)
+    get = client.get("/102905f7b945d56af40e18fb57d9d994.txt")
+    head = client.head("/102905f7b945d56af40e18fb57d9d994.txt")
+    assert head.status_code == 200
+    assert head.content == b""
+    assert dict(head.headers) == dict(get.headers)  # content-length 40 included
