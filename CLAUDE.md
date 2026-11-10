@@ -52,6 +52,7 @@ Desk / Room：DeepSeek 看图拆清单 → 文字搜索 → 每个 slot 一次 L
 
 - `/ghostcart` 是 Yining `ui-design-v1` 的设计接上真实接口（`static/ghostcart.html`、`ghostcart.js`、`styles.css`，数据来自 `?format=ui`）。框选、左右对比和未匹配列表是按她的样式新做的；她分支的 `test_data.js` 是带照片的批量导出，没有合并。
 - `/classic` 是旧页面（`static/classic.html` + `classic.css`），功能相同，作兜底。`/` 和批量页仍用 `static/style.css`。
+- **`/102905f7b945d56af40e18fb57d9d994.txt` 是微信解封验证文件，必须永久保留，不要删除或修改。** 路由在 `src/main.py`（`wechat_verification`），原样返回纯文本 `49660d71b2a5f9874ff53248f7bb5402979df318`，不需要登录；`tests/test_wechat_verification.py` 检查它。
 
 ## 比赛
 
