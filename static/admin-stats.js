@@ -1,7 +1,7 @@
 /* /admin/stats — team-only usage dashboard.
  *
  * The page is served as a 404 and stays a plain "Not Found" unless /api/admin/stats
- * answers, which it does only for a whitelisted teammate signed in on this site.
+ * answers, which it does only for an ADMIN_EMAILS account signed in on this site.
  * There is no sign-in button here on purpose: sign in on /ghostcart, then open this.
  * Everything drawn is an aggregate; the server never sends an email or a name.
  */
@@ -25,7 +25,7 @@ let data = null;
 async function load(user) {
   const token = await user.getIdToken();
   const r = await fetch('/api/admin/stats', { headers: { Authorization: `Bearer ${token}` } });
-  if (!r.ok) return;  // not a teammate: leave the 404 as it is
+  if (!r.ok) return;  // not on ADMIN_EMAILS: leave the 404 as it is
   render(await r.json());
 }
 
@@ -113,6 +113,10 @@ function render(d) {
   for (const text of notes) $('notes').append(Object.assign(document.createElement('li'), { textContent: text }));
   $('notes-card').hidden = !notes.length && !errors.length;
 
+  $('foot').textContent = 'Aggregates only. A valid user is a Google account created on or after '
+    + `11/8 13:00 PT that isn't an @aisum.com address${d.team_excluded ? ' or a teammate' : ''}. `
+    + (d.team_excluded ? '' : 'Teammates are counted for now (TEAM_EMAILS is not set). ')
+    + 'Cached on the server for 10 minutes.';
   requestAnimationFrame(drawAll);  // after layout, so the charts get the real width
   renderTable(d);
 }

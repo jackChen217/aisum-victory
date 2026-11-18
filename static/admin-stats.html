@@ -9,7 +9,7 @@
 </head>
 <body>
 <!-- Served with status 404. Stays a plain "Not Found" unless /api/admin/stats answers,
-     which it does only for a teammate signed in on this site (sign in on /ghostcart). -->
+     which it does only for an ADMIN_EMAILS account signed in on this site (sign in on /ghostcart). -->
 <pre id="notfound">{"detail":"Not Found"}</pre>
 <main id="dash" hidden>
   <header class="head">
@@ -51,9 +51,7 @@
     </details>
   </section>
 
-  <p class="foot">Aggregates only. A valid user is a Google account that signed in on or
-    after 11/8 13:00 PT, isn't a teammate and isn't an @aisum.com address. Cached on the
-    server for 10 minutes.</p>
+  <p class="foot" id="foot"></p>
 </main>
 <div id="tip" class="tip" hidden></div>
 <script type="module" src="/static/admin-stats.js"></script>

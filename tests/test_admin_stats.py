@@ -18,6 +18,7 @@ DAY2 = datetime(2026, 11, 10, 17, 0, tzinfo=timezone.utc)
 @pytest.fixture(autouse=True)
 def team(monkeypatch):
     monkeypatch.setenv("ADMIN_EMAILS", f" {TEAM.upper()} , other@example.com")
+    monkeypatch.setenv("TEAM_EMAILS", TEAM)
 
 
 def _claims(monkeypatch, claims):
@@ -150,6 +151,15 @@ def test_plan_logs_uid_and_type_never_email(monkeypatch, capsys):
     line = lines[0]
     assert (line["uid"], line["scenario"], line["status"], line["excluded"]) == ("uid-1", "desk", 200, False)
     assert "email" not in line
+
+
+def test_teammates_count_while_team_emails_is_unset(monkeypatch):
+    monkeypatch.delenv("TEAM_EMAILS")
+    assert not usage.is_excluded_email(TEAM)  # ADMIN_EMAILS alone excludes nobody
+    assert usage.is_excluded_email("boss@aisum.com")
+    users = [{"uid": "t", "created": AFTER, "excluded": usage.is_excluded_email(TEAM)}]
+    out = stats.aggregate(users, [], [], NOW, {})
+    assert out["users"]["total"] == 1 and out["team_excluded"] is False
 
 
 def test_teammate_plan_is_flagged(monkeypatch, capsys):

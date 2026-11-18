@@ -7,7 +7,7 @@ uid and no request body, so `/api/plan` writes one structured line per call:
     {"event": "ghostcart_plan", "uid": "...", "scenario": "outfit", "excluded": false,
      "status": 200, "time": "2026-11-18T15:04:05Z"}
 
-Never an email or a name. `excluded` says whether the caller was a teammate or an
+Never an email or a name. `excluded` says whether the caller was on TEAM_EMAILS or an
 @aisum.com account at the time of the call, so the counts can leave them out even
 when the user list can't be read.
 
@@ -20,17 +20,27 @@ from datetime import datetime, timezone
 
 PLAN_EVENT = "ghostcart_plan"
 
-# Teammates: they see /admin/stats and are never counted. Comma-separated emails.
-# PLACEHOLDER: set ADMIN_EMAILS on Cloud Run to the three teammates' Google emails.
+# Who may open /admin/stats. Comma-separated, verified Google emails.
 ADMIN_EMAILS_ENV = "ADMIN_EMAILS"
+# Who is left out of the counts as a teammate. Comma-separated emails. Unset for now:
+# teammates are counted like everyone else. Set it on Cloud Run to exclude them again.
+TEAM_EMAILS_ENV = "TEAM_EMAILS"
 EXCLUDED_DOMAIN = "@aisum.com"
 # Accounts made before scoring started don't count: 2026-11-08 13:00 PT (PST, UTC-8).
 VALID_SINCE = datetime(2026, 11, 8, 21, 0, tzinfo=timezone.utc)
 
 
-def admin_emails() -> set[str]:
-    raw = os.environ.get(ADMIN_EMAILS_ENV, "")
+def _emails(env: str) -> set[str]:
+    raw = os.environ.get(env, "")
     return {e.strip().lower() for e in raw.split(",") if e.strip()}
+
+
+def admin_emails() -> set[str]:
+    return _emails(ADMIN_EMAILS_ENV)
+
+
+def team_emails() -> set[str]:
+    return _emails(TEAM_EMAILS_ENV)
 
 
 def is_admin(claims: dict) -> bool:
@@ -40,7 +50,7 @@ def is_admin(claims: dict) -> bool:
 
 def is_excluded_email(email: str | None) -> bool:
     email = (email or "").lower()
-    return email in admin_emails() or email.endswith(EXCLUDED_DOMAIN)
+    return email in team_emails() or email.endswith(EXCLUDED_DOMAIN)
 
 
 def log_plan(uid: str, scenario: str, claims: dict | None, status: int) -> None:
