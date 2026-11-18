@@ -21,6 +21,8 @@ GhostCart (src/agent/, page at /ghostcart):
   /api/plan           photo + scenario + budget -> slots, optimized plan, explanation
   /api/replan         same session, new budget / owned -> re-optimized plan + changes
   /api/upload         JPEG/PNG bytes (max 8 MB) -> public Cloud Storage URL
+  /admin/stats +
+  /api/admin/stats    team-only usage numbers (src/stats.py); 404 for everyone else
   /api/lookboard-image  a session's photo or planned product image, proxied so the
                        page can export the Lookboard canvas as PNG
 """
@@ -34,17 +36,17 @@ from pathlib import Path
 from typing import Literal
 
 import httpx
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
-from . import image_proxy, llm_client, uploads
+from . import image_proxy, llm_client, stats, uploads, usage
 from .agent import comparison, orchestrator, planner, ui_format
 from .agent.orchestrator import SessionNotFound
 from .agent.outfit import PlanTimeout
 from .agent.planner import PlanError
-from .auth import require_user
+from .auth import require_user, verify_token
 from .config import (FIREBASE_API_KEY, FIREBASE_APP_ID, FIREBASE_AUTH_DOMAIN,
                      FIREBASE_MESSAGING_SENDER_ID, FIREBASE_PROJECT_ID,
                      FIREBASE_STORAGE_BUCKET, ROOT)
@@ -139,6 +141,34 @@ async def classic():
 @app.api_route("/ghostcart/batch", methods=PAGE_METHODS)
 async def ghostcart_batch():
     return page("ghostcart-batch.html")
+
+
+# Team-only usage stats. Everyone else — signed out, signed in but not on ADMIN_EMAILS —
+# gets a plain 404, from the page and from its data route alike. The page itself is
+# served with status 404 too; its script swaps in the dashboard only when the data
+# route answers, which it does only for a whitelisted, verified email.
+@app.api_route("/admin/stats", methods=PAGE_METHODS, include_in_schema=False)
+async def admin_stats_page():
+    response = page("admin-stats.html")
+    response.status_code = 404
+    response.headers["X-Robots-Tag"] = "noindex"
+    return response
+
+
+def require_admin(authorization: str = Header(default="")) -> dict:
+    try:
+        claims = verify_token(authorization)
+    except HTTPException:
+        raise HTTPException(404, "Not Found")
+    if not usage.is_admin(claims):
+        raise HTTPException(404, "Not Found")
+    return claims
+
+
+@app.get("/api/admin/stats", include_in_schema=False)
+async def admin_stats(_: dict = Depends(require_admin)):
+    """Aggregates only (src/stats.py), cached 10 minutes."""
+    return JSONResponse(await stats.get_stats(), headers={"Cache-Control": "private, no-store"})
 
 
 @app.get("/api/firebase-config")
@@ -390,8 +420,19 @@ def _shaped(data: dict, uid: str, fmt: str | None) -> dict:
 
 
 @app.post("/api/plan")
-async def plan(req: PlanRequest, uid: str = Depends(require_user),
+async def plan(req: PlanRequest, request: Request, uid: str = Depends(require_user),
                format: Literal["ui"] | None = None):
+    status = 500  # stays 500 if _plan raises something unexpected
+    try:
+        response = await _plan(req, uid, format)
+        status = response.status_code if isinstance(response, Response) else 200
+        return response
+    finally:
+        # One line per call for /admin/stats: uid, type, status, time — never the email.
+        usage.log_plan(uid, req.scenario, getattr(request.state, "claims", None), status)
+
+
+async def _plan(req: PlanRequest, uid: str, format: str | None):
     try:
         data = await orchestrator.plan(uid, req.image_url, req.scenario, req.budget,
                                        req.owned, req.notes, req.gender,

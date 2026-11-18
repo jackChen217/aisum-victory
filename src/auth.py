@@ -6,7 +6,7 @@ checks Google's signature on it with Google's public keys. No Firebase Admin
 credentials are involved, so it behaves the same on your laptop and on Cloud Run.
 """
 import jwt
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
 from .config import FIREBASE_PROJECT_ID
 
@@ -15,13 +15,13 @@ _KEYS = jwt.PyJWKClient(
     "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com")
 
 
-def require_user(authorization: str = Header(default="")) -> str:
-    """The signed-in user's Firebase uid, or 401 with the reason."""
+def verify_token(authorization: str) -> dict:
+    """The verified claims of a Firebase ID token in an Authorization header, or 401."""
     if not authorization.startswith("Bearer "):
         raise HTTPException(401, "Sign in first — no Firebase ID token in Authorization")
     token = authorization.removeprefix("Bearer ")
     try:
-        claims = jwt.decode(
+        return jwt.decode(
             token, _KEYS.get_signing_key_from_jwt(token).key, algorithms=["RS256"],
             audience=FIREBASE_PROJECT_ID,
             issuer=f"https://securetoken.google.com/{FIREBASE_PROJECT_ID}")
@@ -29,4 +29,13 @@ def require_user(authorization: str = Header(default="")) -> str:
         # Wrong audience/issuer means the token is from a different Firebase project
         # than FIREBASE_PROJECT_ID — the usual cause after switching projects.
         raise HTTPException(401, f"Firebase ID token rejected: {e}")
+
+
+def require_user(request: Request, authorization: str = Header(default="")) -> str:
+    """The signed-in user's Firebase uid, or 401 with the reason.
+
+    The claims are also kept on `request.state.claims`, so a route can tell whether
+    the caller is a teammate (src/usage.py) without decoding the token again."""
+    claims = verify_token(authorization)
+    request.state.claims = claims
     return claims["sub"]

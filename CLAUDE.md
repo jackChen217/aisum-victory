@@ -48,6 +48,14 @@ Desk / Room：DeepSeek 看图拆清单 → 文字搜索 → 每个 slot 一次 L
 - 用户提供的 `ghostcart-batch-8052b37c-….json` 只有 8 条，均成功，已选商品 rank 都为 1，合计 $32–80（预算 $150），所以那批的视觉差不能归因于整套预算 DP 降级选品；里面没有未筛选的完整响应，推不出 A 组。
 - 离线回归不代表真实图匹配或线上时延已经达标；四组的视觉效果还要用真实图片对比。下方旧进度记录里的审核、取色、BM25 和 LLM 解释属于此前实验版本（现在的 C 组）。
 
+## 统计页（`/admin/stats`）
+
+- 只给 `ADMIN_EMAILS`（Cloud Run 环境变量，逗号分隔，验证过的邮箱）里的队友看；其他人（包括未登录）页面和 `/api/admin/stats` 都是 404。页面没有登录按钮：先在 `/ghostcart` 登录再打开。
+- 有效用户 = Firebase Auth 用户，去掉 `ADMIN_EMAILS`、`@aisum.com` 和 2026-11-08 13:00 PT 之前创建的账号。按 ET 分天。只输出汇总数字，服务器缓存 10 分钟。实现在 `src/stats.py`、`src/usage.py`。
+- 每次 `/api/plan` 往 stdout 写一行 JSON（`event: ghostcart_plan`，uid、scenario、status、time、`excluded`），**不写邮箱**。这行之前的历史只有 Cloud Run 请求日志的每日总数（没有类型、没有用户、含队友），默认保留 30 天。
+- 数据源：用户列表要 `firebaseauth.users.get`，日志要 `logging.logEntries.list`（服务账号）。读不到用户列表时按首次 plan 估算并标 approx.；哪个源报错页面上会写。
+- 图上的事件标注在 `src/stats.py` 的 `EVENTS`。
+
 ## 页面
 
 - `/ghostcart` 是 Yining `ui-design-v1` 的设计接上真实接口（`static/ghostcart.html`、`ghostcart.js`、`styles.css`，数据来自 `?format=ui`）。框选、左右对比和未匹配列表是按她的样式新做的；她分支的 `test_data.js` 是带照片的批量导出，没有合并。
