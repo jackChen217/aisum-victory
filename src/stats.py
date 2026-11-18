@@ -5,7 +5,7 @@ service account; locally, your application-default credentials):
 
 - Firebase Auth user list (Identity Toolkit `accounts:batchGet`, the call the Admin
   SDK's list_users makes; needs firebaseauth.users.get). Gives sign-up times.
-  If it can't be read, sign-ups are approximated by each uid's first plan.
+  If it can't be read, the page shows no user numbers until it can.
 - The structured `ghostcart_plan` log lines from src/usage.py (needs
   logging.logEntries.list). Per user, per type. Only exist from the deploy that
   added them.
@@ -16,6 +16,9 @@ Emails are read only to filter users out, inside this module; nothing that leave
 names a person. The result is cached for 10 minutes.
 """
 import asyncio
+import json
+import re
+import sys
 import time
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
@@ -165,10 +168,10 @@ def aggregate(users: list[dict] | None, events: list[dict] | None,
         valid = {}
         for e in counted_events:  # ordered by time, so the first one wins
             valid.setdefault(e["uid"], e["time"])
-        users_source, approximate = "first_plan", True
-        notes.append("Sign-ups are approximate: the user list could not be read, so each "
-                     "user is counted from their first plan, and accounts created before "
-                     "11/8 13:00 PT can't be told apart.")
+        # Only to filter searches below: these counts are not shown as users.
+        users_source, approximate = "unavailable", True
+        notes.append("Without the user list, searches by type count every non-team "
+                     "account, including ones created before 11/8 13:00 PT.")
 
     new = [0] * len(days)
     for created in valid.values():
@@ -205,7 +208,8 @@ def aggregate(users: list[dict] | None, events: list[dict] | None,
         "tz": "ET (UTC−5)",
         "valid_since": _iso(usage.VALID_SINCE),
         "days": [d.isoformat() for d in days],
-        "users": {"source": users_source, "approximate": approximate, "total": total,
+        "users": {"available": users is not None, "source": users_source,
+                  "approximate": approximate, "total": total,
                   "new": new, "cumulative": cumulative},
         "searches": {**by_type, "request_log": history,
                      "structured_since": structured_since and _iso(structured_since)},
@@ -218,6 +222,18 @@ def aggregate(users: list[dict] | None, events: list[dict] | None,
     }
 
 
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
+
+
+def log_source_error(source: str, message: str) -> None:
+    """One JSON line per failed source, so failures can be found in Cloud Logging.
+    Anything shaped like an email is masked, in case an upstream message carries one."""
+    print(json.dumps({"severity": "WARNING", "message": f"admin_stats {source} failed",
+                      "event": "admin_stats_source_error", "source": source,
+                      "error": _EMAIL.sub("<email>", message)[:500]}),
+          file=sys.stdout, flush=True)
+
+
 # ── Entry point ──────────────────────────────────────────────────────────
 
 async def _collect() -> dict:
@@ -228,6 +244,7 @@ async def _collect() -> dict:
                    "x-goog-user-project": FIREBASE_PROJECT_ID}
     except Exception as e:
         errors["credentials"] = f"No Google credentials: {type(e).__name__}"
+        log_source_error("credentials", errors["credentials"])
         return aggregate(None, None, None, datetime.now(timezone.utc), errors)
     since = usage.VALID_SINCE
     async with httpx.AsyncClient(timeout=30) as client:
@@ -238,6 +255,7 @@ async def _collect() -> dict:
         if isinstance(result, BaseException):
             errors[name] = (str(result) if isinstance(result, SourceError)
                             else f"{type(result).__name__}: {result}")
+            log_source_error(name, errors[name])
     users, events, request_log = (None if isinstance(r, BaseException) else r for r in results)
     return aggregate(users, events, request_log, datetime.now(timezone.utc), errors)
 

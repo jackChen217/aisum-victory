@@ -53,7 +53,7 @@ Desk / Room：DeepSeek 看图拆清单 → 文字搜索 → 每个 slot 一次 L
 - 只给 `ADMIN_EMAILS`（Cloud Run 环境变量，逗号分隔，验证过的邮箱）里的队友看；其他人（包括未登录）页面和 `/api/admin/stats` 都是 404。页面没有登录按钮：先在 `/ghostcart` 登录再打开。
 - 有效用户 = Firebase Auth 用户，去掉 `@aisum.com` 和 2026-11-08 13:00 PT 之前创建的账号。**队友暂时算在内**：要排除就在 Cloud Run 设 `TEAM_EMAILS`（逗号分隔），和能看页面的 `ADMIN_EMAILS` 是两个变量。按 ET 分天。只输出汇总数字，服务器缓存 10 分钟。实现在 `src/stats.py`、`src/usage.py`。
 - 每次 `/api/plan` 往 stdout 写一行 JSON（`event: ghostcart_plan`，uid、scenario、status、time、`excluded`），**不写邮箱**。这行之前的历史只有 Cloud Run 请求日志的每日总数（没有类型、没有用户、含队友），默认保留 30 天。
-- 数据源：用户列表要 `firebaseauth.users.get`，日志要 `logging.logEntries.list`（服务账号）。读不到用户列表时按首次 plan 估算并标 approx.；哪个源报错页面上会写。
+- 数据源：用户列表要 `firebaseauth.users.get`，日志要 `logging.logEntries.list`（服务账号）。读不到用户列表时，用户数、回访和两张用户图都显示 "Waiting for permission to read the user list"（不显示 0）。哪个源失败页面上会写，同时往服务器日志写一行 `event: admin_stats_source_error`（source、error，邮箱会被遮掉）。
 - 图上的事件标注在 `src/stats.py` 的 `EVENTS`。
 
 ## 页面

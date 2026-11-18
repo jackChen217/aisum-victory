@@ -109,3 +109,5 @@ summary { cursor: pointer; font-weight: 600; }
 .tip .r b { color: var(--text-primary); font-weight: 600; }
 .tip .r i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: var(--c); margin-right: 6px; }
 .tip .ev { color: var(--event); margin-top: 4px; }
+.waiting { margin: 0; padding: 48px 16px; text-align: center; color: var(--text-secondary);
+  border: 1px dashed var(--border); border-radius: 8px; }

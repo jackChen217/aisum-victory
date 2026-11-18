@@ -19,6 +19,7 @@ const SERIES = [
 ];
 
 let data = null;
+const WAITING = 'Waiting for permission to read the user list';
 
 // ── Fetch ────────────────────────────────────────────────────────────────
 
@@ -79,18 +80,18 @@ function render(d) {
   const s = d.searches;
   const totalSearches = SERIES.reduce((n, ser) => n + s[ser.key].reduce((a, b) => a + b, 0), 0);
   const last = d.days.length - 1;
-  const approx = u.approximate ? '<span class="badge">approx.</span>' : '';
+  const usersOk = u.available !== false;
   $('tiles').innerHTML = [
-    tile('Valid users', u.total + approx, `+${u.new[last]} today`),
+    usersOk ? tile('Valid users', u.total, `+${u.new[last]} today`)
+      : tile('Valid users', '–', WAITING),
     tile('Searches since 11/8', totalSearches,
       `${SERIES.reduce((n, ser) => n + s[ser.key][last], 0)} today`),
-    tile('Returning users', d.returning.count,
-      `${pct(d.returning.share)} of valid users · ${d.returning.active} searched at least once`),
+    usersOk ? tile('Returning users', d.returning.count,
+      `${pct(d.returning.share)} of valid users · ${d.returning.active} searched at least once`)
+      : tile('Returning users', '–', WAITING),
   ].join('');
 
-  $('users-hint').textContent = u.approximate
-    ? 'Approximate: counted from each user’s first plan, not from sign-ups.'
-    : 'From the Firebase Auth user list.';
+  $('users-hint').textContent = usersOk ? 'From the Firebase Auth user list.' : '';
 
   $('legend-searches').innerHTML = SERIES
     .filter((ser) => ser.key !== 'request_log' || s.request_log.some(Boolean))
@@ -128,7 +129,8 @@ function tile(label, value, detail) {
 
 function renderTable(d) {
   const head = ['Day', 'New users', 'Cumulative', ...SERIES.map((s) => s.label)];
-  const rows = d.days.map((day, i) => [fmtDay(day), d.users.new[i], d.users.cumulative[i],
+  const ok = d.users.available !== false;
+  const rows = d.days.map((day, i) => [fmtDay(day), ok ? d.users.new[i] : '–', ok ? d.users.cumulative[i] : '–',
     ...SERIES.map((s) => d.searches[s.key][i])]);
   $('table').innerHTML = `<thead><tr>${head.map((h) => `<th>${h}</th>`).join('')}</tr></thead>`
     + `<tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody>`;
@@ -139,8 +141,14 @@ function renderTable(d) {
 function drawAll() {
   if (!data) return;
   const d = data;
-  chart($('chart-cumulative'), d, [{ label: 'Valid users', color: 'var(--series-1)', values: d.users.cumulative }], 'line');
-  chart($('chart-new'), d, [{ label: 'New valid users', color: 'var(--series-1)', values: d.users.new }], 'bars');
+  if (d.users.available === false) {
+    for (const id of ['chart-cumulative', 'chart-new']) {
+      $(id).innerHTML = `<p class="waiting">${WAITING}</p>`;
+    }
+  } else {
+    chart($('chart-cumulative'), d, [{ label: 'Valid users', color: 'var(--series-1)', values: d.users.cumulative }], 'line');
+    chart($('chart-new'), d, [{ label: 'New valid users', color: 'var(--series-1)', values: d.users.new }], 'bars');
+  }
   chart($('chart-searches'), d, SERIES.map((s) => ({ label: s.label, color: s.color, values: d.searches[s.key] }))
     .filter((s) => s.values.some(Boolean) || s.label !== SERIES[3].label), 'stack');
 }

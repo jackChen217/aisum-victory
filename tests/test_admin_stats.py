@@ -98,14 +98,32 @@ def test_searches_by_type_history_and_returning():
     assert out["returning"] == {"count": 1, "active": 2, "total": 3, "share": 1 / 3}
 
 
-def test_first_plan_fallback_is_marked_approximate():
+def test_without_the_user_list_users_are_unavailable():
     events = [_ev(AFTER, "x", "outfit"), _ev(DAY2, "x", "desk"), _ev(DAY2, "y", "room"),
               _ev(DAY2, "team", "room", excluded=True)]
     out = stats.aggregate(None, events, None, NOW, {"users": "HTTP 403"})
-    assert out["users"]["approximate"] and out["users"]["source"] == "first_plan"
-    assert out["users"]["new"] == [1, 0, 1, 0, 0]
+    assert out["users"]["available"] is False and out["users"]["source"] == "unavailable"
     assert out["errors"] == {"users": "HTTP 403"}
-    assert any("approximate" in n for n in out["notes"])
+    assert out["searches"]["desk"][2] == 1  # searches still count, minus teammates
+    assert out["searches"]["room"][2] == 1
+
+
+def test_failed_sources_go_to_the_server_log(monkeypatch, capsys):
+    async def ok(*a):
+        return []
+    async def denied(*a):
+        raise stats.SourceError("Firebase Auth user list: HTTP 400: INSUFFICIENT_PERMISSION "
+                                "for someone@example.com")
+    monkeypatch.setattr(stats, "_access_token", lambda: "t")
+    monkeypatch.setattr(stats, "fetch_users", denied)
+    monkeypatch.setattr(stats, "fetch_plan_events", ok)
+    monkeypatch.setattr(stats, "fetch_request_log", ok)
+    out = asyncio.run(stats._collect())
+    assert out["users"]["available"] is False and set(out["errors"]) == {"users"}
+    line = json.loads(capsys.readouterr().out)
+    assert line["event"] == "admin_stats_source_error" and line["source"] == "users"
+    assert line["severity"] == "WARNING" and "INSUFFICIENT_PERMISSION" in line["error"]
+    assert "someone@example.com" not in line["error"] and "<email>" in line["error"]
 
 
 def test_output_names_nobody():
