@@ -34,7 +34,7 @@ SCENARIOS = ("outfit", "desk", "room")
 # Chart annotations, one per day (ET). Add an entry for each launch or push.
 EVENTS = [
     # Posted the evening of 11/9.
-    {"date": "2026-11-09", "label": "WeChat Moments (朋友圈) launch", "short": "朋友圈"},
+    {"date": "2026-11-09", "label": "Launch"},
 ]
 
 _cache: dict = {"until": 0.0, "data": None}
