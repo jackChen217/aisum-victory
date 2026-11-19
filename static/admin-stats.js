@@ -18,11 +18,8 @@ const SERIES = [
   { key: 'request_log', label: 'All types (request log)', color: 'var(--series-history)' },
 ];
 
-// Two user counts. Official is our estimate of the organisers' rule.
-const USERS = [
-  { key: 'all', label: 'All sign-ups', color: 'var(--series-1)' },
-  { key: 'official', label: 'Official count (est.)', color: 'var(--series-2)' },
-];
+// The charts show the official count, our estimate of the organisers' rule; all
+// sign-ups appear only as a line of small text under the big number.
 const OFFICIAL_RULE = 'Created on or after 11/8 13:00 PT, not @aisum.com';
 
 let data = null;
@@ -90,9 +87,8 @@ function render(d) {
   const usersOk = u.available !== false;
   const rule = OFFICIAL_RULE + (d.team_excluded ? ', not a teammate' : '; teammates counted for now');
   $('tiles').innerHTML = [
-    usersOk ? tile('All sign-ups', u.all.total, `+${u.all.new[last]} today · every account except @aisum.com`)
-      : tile('All sign-ups', '–', WAITING),
-    usersOk ? tile('Official (est.)', u.official.total, `+${u.official.new[last]} today · ${rule}`)
+    usersOk ? tile('Official (est.)', u.official.total,
+      `All sign-ups: ${u.all.total} (incl. before launch)<br>+${u.official.new[last]} today · ${rule}`)
       : tile('Official (est.)', '–', WAITING),
     tile(`Searches since ${fmtDay(d.days[0])}`, totalSearches,
       `${SERIES.reduce((n, ser) => n + s[ser.key][last], 0)} today`),
@@ -103,9 +99,6 @@ function render(d) {
 
   $('users-hint').textContent = usersOk
     ? `From the Firebase Auth user list. Official (est.): ${rule}.` : '';
-  const userLegend = USERS.map((ser) => `<span style="--c:${ser.color}">${ser.label}</span>`).join('');
-  $('legend-cumulative').innerHTML = usersOk ? userLegend : '';
-  $('legend-new').innerHTML = usersOk ? userLegend : '';
 
   $('legend-searches').innerHTML = SERIES
     .filter((ser) => ser.key !== 'request_log' || s.request_log.some(Boolean))
@@ -162,9 +155,9 @@ function drawAll() {
       $(id).innerHTML = `<p class="waiting">${WAITING}</p>`;
     }
   } else {
-    const of = (field) => USERS.map((s) => ({ label: s.label, color: s.color, values: d.users[s.key][field] }));
-    chart($('chart-cumulative'), d, of('cumulative'), 'line');
-    chart($('chart-new'), d, of('new'), 'group');
+    const official = (field) => [{ label: 'Official (est.)', color: 'var(--series-1)', values: d.users.official[field] }];
+    chart($('chart-cumulative'), d, official('cumulative'), 'line');
+    chart($('chart-new'), d, official('new'), 'bars');
   }
   chart($('chart-searches'), d, SERIES.map((s) => ({ label: s.label, color: s.color, values: d.searches[s.key] }))
     .filter((s) => s.values.some(Boolean) || s.label !== SERIES[3].label), 'stack');
@@ -222,16 +215,6 @@ function chart(host, d, series, kind) {
       const above = k === 0 || s.values[lastI] > series[0].values[lastI];
       svg.append(el('text', { x: x(lastI) - 6, y: y(s.values[lastI]) + (above ? -9 : 17), 'text-anchor': 'end',
         style: 'fill:var(--text-primary);font-weight:600' }, s.values[lastI]));
-    });
-  } else if (kind === 'group') {
-    const each = Math.max(2, Math.min(14, (band * 0.7) / series.length - 1));
-    d.days.forEach((_, i) => {
-      series.forEach((s, k) => {
-        const v = s.values[i];
-        if (!v) return;
-        const left = x(i) - (series.length * (each + 2) - 2) / 2 + k * (each + 2);  // 2px gap between bars
-        svg.append(roundedTop(left, y(v), each, y(0) - y(v), Math.min(4, each / 2), s.color));
-      });
     });
   } else {
     d.days.forEach((_, i) => {

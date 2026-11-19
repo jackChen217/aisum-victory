@@ -51,7 +51,7 @@ Desk / Room：DeepSeek 看图拆清单 → 文字搜索 → 每个 slot 一次 L
 ## 统计页（`/admin/stats`）
 
 - 只给 `ADMIN_EMAILS`（Cloud Run 环境变量，逗号分隔，验证过的邮箱）里的队友看；其他人（包括未登录）页面和 `/api/admin/stats` 都是 404。页面没有登录按钮：先在 `/ghostcart` 登录再打开。
-- 用户两种口径：**All sign-ups** = 所有账号，只去掉 `@aisum.com`；**Official count (est.)** = 我们对主办方规则的估计：2026-11-08 13:00 PT 之后创建、非 `@aisum.com`。**队友暂时算在内**：要从官方口径里排除就在 Cloud Run 设 `TEAM_EMAILS`（逗号分隔），和能看页面的 `ADMIN_EMAILS` 是两个变量。回访用户只算官方口径的用户。横轴从第一个账号注册那天（11/7）开始；"Launch" 标在 11/8（评估 11/8 4 PM ET 开始）。按 ET 分天。只输出汇总数字，服务器缓存 10 分钟。实现在 `src/stats.py`、`src/usage.py`。
+- 用户两种口径：**All sign-ups** = 所有账号，只去掉 `@aisum.com`；**Official count (est.)** = 我们对主办方规则的估计：2026-11-08 13:00 PT 之后创建、非 `@aisum.com`。**队友暂时算在内**：要从官方口径里排除就在 Cloud Run 设 `TEAM_EMAILS`（逗号分隔），和能看页面的 `ADMIN_EMAILS` 是两个变量。页面顶部和两张用户图只显示官方口径；All sign-ups 只在大数字下方作一行小字。回访用户只算官方口径的用户。横轴从第一个账号注册那天（11/7）开始；"Launch" 标在 11/8（评估 11/8 4 PM ET 开始）。按 ET 分天。只输出汇总数字，服务器缓存 10 分钟。实现在 `src/stats.py`、`src/usage.py`。
 - 每次 `/api/plan` 往 stdout 写一行 JSON（`event: ghostcart_plan`，uid、scenario、status、time、`excluded`），**不写邮箱**。这行之前的历史只有 Cloud Run 请求日志的每日总数（没有类型、没有用户、含队友），默认保留 30 天。
 - 数据源：用户列表要 `firebaseauth.users.get`，日志要 `logging.logEntries.list`（服务账号）。读不到用户列表时，用户数、回访和两张用户图都显示 "Waiting for permission to read the user list"（不显示 0）。哪个源失败页面上会写，同时往服务器日志写一行 `event: admin_stats_source_error`（source、error，邮箱会被遮掉）。
 - 图上的事件标注在 `src/stats.py` 的 `EVENTS`。
