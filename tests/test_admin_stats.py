@@ -65,12 +65,19 @@ def test_data_for_a_teammate(monkeypatch):
 
 # ── Aggregation ──────────────────────────────────────────────────────────
 
+EARLY = datetime(2026, 11, 7, 18, 0, tzinfo=timezone.utc)  # 11/7 ET, before the cutoff
+
+
+def _u(uid, created, aisum=False, team=False):
+    return {"uid": uid, "created": created, "aisum": aisum, "team": team}
+
+
 USERS = [
-    {"uid": "a", "created": AFTER, "excluded": False},
-    {"uid": "b", "created": DAY2, "excluded": False},
-    {"uid": "c", "created": DAY2, "excluded": False},
-    {"uid": "team", "created": DAY2, "excluded": True},
-    {"uid": "early", "created": usage.VALID_SINCE - timedelta(minutes=1), "excluded": False},
+    _u("a", AFTER), _u("b", DAY2), _u("c", DAY2),
+    _u("team", DAY2, team=True),
+    _u("boss", DAY2, aisum=True),
+    _u("early", EARLY),
+    _u("cutoff", usage.VALID_SINCE - timedelta(minutes=1)),  # 11/8, one minute too early
 ]
 
 
@@ -78,23 +85,39 @@ def _ev(t, uid, scenario, excluded=False):
     return {"time": t, "uid": uid, "scenario": scenario, "excluded": excluded}
 
 
-def test_users_new_and_cumulative():
+def test_axis_starts_on_the_first_sign_up():
     out = stats.aggregate(USERS, [], [], NOW, {})
-    assert out["days"] == ["2026-11-08", "2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12"]
-    assert out["users"]["new"] == [1, 0, 2, 0, 0]
-    assert out["users"]["cumulative"] == [1, 1, 3, 3, 3]
-    assert out["users"]["total"] == 3 and not out["users"]["approximate"]
+    assert out["days"] == ["2026-11-07", "2026-11-08", "2026-11-09", "2026-11-10",
+                           "2026-11-11", "2026-11-12"]
+
+
+def test_all_sign_ups_drop_only_aisum():
+    all_ = stats.aggregate(USERS, [], [], NOW, {})["users"]["all"]
+    assert all_["new"] == [1, 2, 0, 3, 0, 0]  # early; a + cutoff; b, c, team
+    assert all_["cumulative"] == [1, 3, 3, 6, 6, 6] and all_["total"] == 6
+
+
+def test_official_follows_the_cutoff_and_team_emails():
+    official = stats.aggregate(USERS, [], [], NOW, {})["users"]["official"]
+    assert official["new"] == [0, 1, 0, 2, 0, 0]
+    assert official["cumulative"] == [0, 1, 1, 3, 3, 3] and official["total"] == 3
+
+
+def test_launch_is_marked_on_11_8():
+    assert stats.aggregate(USERS, [], [], NOW, {})["events"] == [
+        {"date": "2026-11-08", "label": "Launch"}]
 
 
 def test_searches_by_type_history_and_returning():
     events = [_ev(DAY2, "a", "outfit"), _ev(DAY2 + timedelta(hours=1), "a", "desk"),
               _ev(DAY2, "b", "room"), _ev(DAY2, "team", "outfit", excluded=True),
-              _ev(DAY2, "early", "outfit")]
-    history = [AFTER, AFTER + timedelta(hours=2), DAY2 + timedelta(hours=5)]  # last one after logging began
+              _ev(DAY2, "early", "outfit"), _ev(DAY2, "early", "desk")]
+    history = [EARLY, AFTER, AFTER + timedelta(hours=2), DAY2 + timedelta(hours=5)]  # last: after logging began
     out = stats.aggregate(USERS, events, history, NOW, {})
     s = out["searches"]
-    assert (s["outfit"][2], s["desk"][2], s["room"][2]) == (1, 1, 1)
-    assert s["request_log"] == [2, 0, 0, 0, 0]
+    assert (s["outfit"][3], s["desk"][3], s["room"][3]) == (2, 2, 1)  # early's count too
+    assert s["request_log"] == [1, 2, 0, 0, 0, 0]
+    # Returning counts official users only: a (2 plans); early is not official.
     assert out["returning"] == {"count": 1, "active": 2, "total": 3, "share": 1 / 3}
 
 
@@ -102,7 +125,8 @@ def test_without_the_user_list_users_are_unavailable():
     events = [_ev(AFTER, "x", "outfit"), _ev(DAY2, "x", "desk"), _ev(DAY2, "y", "room"),
               _ev(DAY2, "team", "room", excluded=True)]
     out = stats.aggregate(None, events, None, NOW, {"users": "HTTP 403"})
-    assert out["users"]["available"] is False and out["users"]["source"] == "unavailable"
+    assert out["users"]["available"] is False
+    assert out["days"][0] == "2026-11-08"
     assert out["errors"] == {"users": "HTTP 403"}
     assert out["searches"]["desk"][2] == 1  # searches still count, minus teammates
     assert out["searches"]["room"][2] == 1
@@ -127,7 +151,7 @@ def test_failed_sources_go_to_the_server_log(monkeypatch, capsys):
 
 
 def test_output_names_nobody():
-    users = [{"uid": "a", "created": AFTER, "excluded": False}]
+    users = [_u("a", AFTER)]
     text = json.dumps(stats.aggregate(users, [_ev(AFTER, "a", "outfit")], [], NOW, {}))
     assert "@" not in text and '"a"' not in text
 
@@ -175,9 +199,9 @@ def test_teammates_count_while_team_emails_is_unset(monkeypatch):
     monkeypatch.delenv("TEAM_EMAILS")
     assert not usage.is_excluded_email(TEAM)  # ADMIN_EMAILS alone excludes nobody
     assert usage.is_excluded_email("boss@aisum.com")
-    users = [{"uid": "t", "created": AFTER, "excluded": usage.is_excluded_email(TEAM)}]
+    users = [_u("t", AFTER, team=usage.is_team_email(TEAM))]
     out = stats.aggregate(users, [], [], NOW, {})
-    assert out["users"]["total"] == 1 and out["team_excluded"] is False
+    assert out["users"]["official"]["total"] == 1 and out["team_excluded"] is False
 
 
 def test_teammate_plan_is_flagged(monkeypatch, capsys):

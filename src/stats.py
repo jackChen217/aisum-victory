@@ -34,10 +34,14 @@ CACHE_SECONDS = 600
 TZ = timezone(timedelta(hours=-5), "ET")
 SCENARIOS = ("outfit", "desk", "room")
 
+# Logs are read from the first day of the contest (11/7 00:00 ET); the chart axis
+# starts on the day of the first sign-up.
+LOG_SINCE = datetime(2026, 11, 7, 5, 0, tzinfo=timezone.utc)
+
 # Chart annotations, one per day (ET). Add an entry for each launch or push.
 EVENTS = [
-    # Posted the evening of 11/9.
-    {"date": "2026-11-09", "label": "Launch"},
+    # Scoring started 11/8 4 PM ET.
+    {"date": "2026-11-08", "label": "Launch"},
 ]
 
 _cache: dict = {"until": 0.0, "data": None}
@@ -69,7 +73,7 @@ def _raise_for(r: httpx.Response, what: str) -> None:
 
 
 async def fetch_users(client: httpx.AsyncClient, headers: dict) -> list[dict]:
-    """[{uid, created (datetime), excluded}] — the email never leaves this function."""
+    """[{uid, created, aisum, team}] — the email never leaves this function."""
     url = (f"https://identitytoolkit.googleapis.com/v1/projects/"
            f"{FIREBASE_PROJECT_ID}/accounts:batchGet")
     users, token = [], None
@@ -82,7 +86,8 @@ async def fetch_users(client: httpx.AsyncClient, headers: dict) -> list[dict]:
             users.append({
                 "uid": u["localId"],
                 "created": datetime.fromtimestamp(int(u["createdAt"]) / 1000, timezone.utc),
-                "excluded": usage.is_excluded_email(u.get("email")),
+                "aisum": usage.is_aisum_email(u.get("email")),
+                "team": usage.is_team_email(u.get("email")),
             })
         token = body.get("nextPageToken")
         if not token:
@@ -147,45 +152,52 @@ def _day(t: datetime) -> date:
     return t.astimezone(TZ).date()
 
 
-def aggregate(users: list[dict] | None, events: list[dict] | None,
-              request_log: list[datetime] | None, now: datetime,
-              errors: dict[str, str]) -> dict:
-    """Everything the page draws. `None` for a source that could not be read."""
-    start, today = _day(usage.VALID_SINCE), _day(now)
-    days = [start + timedelta(n) for n in range((today - start).days + 1)]
+def _per_day(times, days) -> tuple[list[int], list[int]]:
+    """New per day and the running total. Anything before the first day counts on it."""
     index = {d: i for i, d in enumerate(days)}
-    notes = []
-
-    events = events or []
-    counted_events = [e for e in events if not e["excluded"] and e["uid"]]
-
-    # Valid users and the day each one signed up.
-    if users is not None:
-        valid = {u["uid"]: u["created"] for u in users
-                 if not u["excluded"] and u["created"] >= usage.VALID_SINCE}
-        users_source, approximate = "firebase_auth", False
-    else:
-        valid = {}
-        for e in counted_events:  # ordered by time, so the first one wins
-            valid.setdefault(e["uid"], e["time"])
-        # Only to filter searches below: these counts are not shown as users.
-        users_source, approximate = "unavailable", True
-        notes.append("Without the user list, searches by type count every non-team "
-                     "account, including ones created before 11/8 13:00 PT.")
-
     new = [0] * len(days)
-    for created in valid.values():
-        if _day(created) in index:
-            new[index[_day(created)]] += 1
+    for t in times:
+        d = max(_day(t), days[0])
+        if d in index:
+            new[index[d]] += 1
     cumulative, running = [], 0
     for n in new:
         running += n
         cumulative.append(running)
+    return new, cumulative
 
-    # Searches per day by type, valid users only, from the structured lines …
+
+def aggregate(users: list[dict] | None, events: list[dict] | None,
+              request_log: list[datetime] | None, now: datetime,
+              errors: dict[str, str]) -> dict:
+    """Everything the page draws. `None` for a source that could not be read.
+
+    Two user counts:
+    - all sign-ups: every account except @aisum.com;
+    - official (estimate of the organisers' rule): created on or after 11/8 13:00 PT,
+      not @aisum.com, and not on TEAM_EMAILS (unset for now, so teammates count).
+    """
+    notes = []
+    events = events or []
+    counted_events = [e for e in events if not e["excluded"] and e["uid"]]
+
+    signups = [u for u in users or [] if not u["aisum"]]
+    official = {u["uid"]: u["created"] for u in signups
+                if not u["team"] and u["created"] >= usage.VALID_SINCE}
+
+    # The axis starts on the first sign-up's day (or 11/8 when there is no user list).
+    firsts = [_day(u["created"]) for u in signups] + [_day(usage.VALID_SINCE)]
+    start, today = min(firsts), _day(now)
+    days = [start + timedelta(n) for n in range((today - start).days + 1)]
+    index = {d: i for i, d in enumerate(days)}
+
+    all_new, all_cum = _per_day([u["created"] for u in signups], days)
+    off_new, off_cum = _per_day(official.values(), days)
+
+    # Searches per day by type from the structured lines (teammates on TEAM_EMAILS and
+    # @aisum.com left out) …
     by_type = {s: [0] * len(days) for s in SCENARIOS}
-    valid_events = [e for e in counted_events if e["uid"] in valid]
-    for e in valid_events:
+    for e in counted_events:
         d = _day(e["time"])
         if d in index and e["scenario"] in by_type:
             by_type[e["scenario"]][index[d]] += 1
@@ -199,18 +211,21 @@ def aggregate(users: list[dict] | None, events: list[dict] | None,
         notes.append("Searches before per-user logging started are daily totals from "
                      "Cloud Run's request log: no type, no user, teammates included.")
 
-    plans_per_user = Counter(e["uid"] for e in valid_events)
+    # Returning: official users with two or more plans.
+    plans_per_user = Counter(e["uid"] for e in counted_events if e["uid"] in official)
     returning = sum(1 for n in plans_per_user.values() if n >= 2)
-    total = len(valid)
+    total = len(official)
 
     return {
         "generated_at": _iso(now),
         "tz": "ET (UTC−5)",
         "valid_since": _iso(usage.VALID_SINCE),
         "days": [d.isoformat() for d in days],
-        "users": {"available": users is not None, "source": users_source,
-                  "approximate": approximate, "total": total,
-                  "new": new, "cumulative": cumulative},
+        "users": {
+            "available": users is not None,
+            "all": {"total": len(signups), "new": all_new, "cumulative": all_cum},
+            "official": {"total": total, "new": off_new, "cumulative": off_cum},
+        },
         "searches": {**by_type, "request_log": history,
                      "structured_since": structured_since and _iso(structured_since)},
         "returning": {"count": returning, "active": len(plans_per_user), "total": total,
@@ -246,11 +261,10 @@ async def _collect() -> dict:
         errors["credentials"] = f"No Google credentials: {type(e).__name__}"
         log_source_error("credentials", errors["credentials"])
         return aggregate(None, None, None, datetime.now(timezone.utc), errors)
-    since = usage.VALID_SINCE
     async with httpx.AsyncClient(timeout=30) as client:
         results = await asyncio.gather(
-            fetch_users(client, headers), fetch_plan_events(client, headers, since),
-            fetch_request_log(client, headers, since), return_exceptions=True)
+            fetch_users(client, headers), fetch_plan_events(client, headers, LOG_SINCE),
+            fetch_request_log(client, headers, LOG_SINCE), return_exceptions=True)
     for name, result in zip(("users", "plan_events", "request_log"), results):
         if isinstance(result, BaseException):
             errors[name] = (str(result) if isinstance(result, SourceError)

@@ -48,9 +48,16 @@ def is_admin(claims: dict) -> bool:
     return bool(email) and claims.get("email_verified") is True and email in admin_emails()
 
 
+def is_aisum_email(email: str | None) -> bool:
+    return (email or "").lower().endswith(EXCLUDED_DOMAIN)
+
+
+def is_team_email(email: str | None) -> bool:
+    return (email or "").lower() in team_emails()
+
+
 def is_excluded_email(email: str | None) -> bool:
-    email = (email or "").lower()
-    return email in team_emails() or email.endswith(EXCLUDED_DOMAIN)
+    return is_aisum_email(email) or is_team_email(email)
 
 
 def log_plan(uid: str, scenario: str, claims: dict | None, status: int) -> None:
