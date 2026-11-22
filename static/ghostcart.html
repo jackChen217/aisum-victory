@@ -192,9 +192,17 @@
 
       <section class="compare" aria-label="Your photo next to your cart">
         <div class="compare-col">
-          <p class="compare-label">Your photo</p>
+          <div class="compare-label-row">
+            <p class="compare-label">Your photo</p>
+            <button id="show-boxes" class="box-toggle" type="button" role="switch" aria-checked="false">
+              <span class="box-toggle-track" aria-hidden="true"><span></span></span>Show boxes
+            </button>
+          </div>
           <div class="photo-frame"><div class="photo-boxes" id="photo-boxes">
             <img id="result-photo" alt="The photo this plan was built from">
+            <svg class="photo-mask" id="photo-mask" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true"><path fill-rule="evenodd"/></svg>
+            <div class="mark-layer" id="mark-boxes" aria-hidden="true"></div>
+            <div class="mark-layer" id="mark-dots"></div>
           </div></div>
         </div>
         <div class="compare-col">
@@ -202,7 +210,9 @@
             <p class="compare-label">Your cart</p>
             <button id="download" class="btn btn-secondary btn-sm" type="button">Download image</button>
           </div>
+          <p class="cart-hint" id="cart-hint" hidden>Tap an item to shop</p>
           <div class="cart-board" id="cart-board"></div>
+          <p class="cart-total" id="cart-total"></p>
         </div>
       </section>
 

@@ -1,5 +1,7 @@
 // GhostCart page: /api/upload, /api/plan?format=ui, /api/replan?format=ui.
 // Prices, names and links are shown as the API returns them.
+import { cartMarks, spreadDots } from '/static/resultmarks.js';
+
 const $ = (id) => document.getElementById(id);
 
 function el(tag, props = {}, ...kids) {
@@ -45,6 +47,10 @@ const state = {
   gender: null,
   pins: {},
   requestId: 0,
+  marks: [],             // cart items in photo order, with their boxes and dots
+  selected: null,        // slot shown on the photo
+  sticky: false,         // selected by a click, not just a hover
+  showBoxes: false,
 };
 
 const announce = (msg) => { $('live').textContent = msg; };
@@ -266,22 +272,138 @@ function productCard(p, changed) {
       altsRow(p.slot, p.alternatives, 'Or:')));
 }
 
-function renderBoxes(data) {
+// ── Photo marks and cart: one number per cart item ───────────────────
+const DOT = 22, DOT_GAP = 26;
+const canHover = window.matchMedia('(hover: hover)').matches;
+const narrow = () => window.matchMedia('(max-width: 760px)').matches;
+const frac = (v) => `${(v * 100).toFixed(3)}%`;
+
+// "Tap an item to shop" shows until the first product is opened. Storage can be off
+// (private mode, blocked site data); then the hint just shows each time.
+const HINT_KEY = 'ghostcart.shopHintSeen';
+function hintSeen() { try { return localStorage.getItem(HINT_KEY) === '1'; } catch { return false; } }
+function markHintSeen() {
+  try { localStorage.setItem(HINT_KEY, '1'); } catch { /* not stored: shows again next time */ }
+  $('cart-hint').hidden = true;
+}
+
+function renderMarks() {
+  $('mark-boxes').replaceChildren(...state.marks.flatMap((m) => m.boxes.map((b) =>
+    el('span', { class: 'mark-box', 'data-slot': m.product.slot,
+                 style: `left:${frac(b.x1)};top:${frac(b.y1)};width:${frac(b.x2 - b.x1)};height:${frac(b.y2 - b.y1)}` }))));
+  $('mark-dots').replaceChildren(...state.marks.flatMap((m) => m.dots.map((d) =>
+    el('button', { type: 'button', class: 'mark-dot', 'data-slot': m.product.slot,
+                   'data-x': d.x, 'data-y': d.y,
+                   'aria-label': `${m.n}. ${m.product.item_label}: show in cart`,
+                   onclick: (e) => { e.stopPropagation(); pickFromPhoto(m.product.slot); } },
+      String(m.n)))));
+  placeDots();
+}
+
+// Dots sit at the top centre of their box; two that would touch are moved apart.
+function placeDots() {
   const frame = $('photo-boxes');
-  frame.querySelectorAll('.det-box').forEach((b) => b.remove());
-  for (const d of data.detected_items) {
-    const b = d.bounding_box;
-    if (!b) continue;
-    const matched = d.status === 'matched';
-    frame.append(el('button', { type: 'button',
-        class: `det-box ${matched ? 'is-matched' : 'is-missing'}`,
-        style: `left:${b.x1 * 100}%;top:${b.y1 * 100}%;width:${b.width * 100}%;height:${b.height * 100}%`,
-        title: d.description || d.item_label,
-        'aria-label': `${d.item_label}: ${d.status.replace('_', ' ')}`,
-        onclick: () => (matched ? $(`card-${d.slot}`) : $('unmatched-section'))
-          ?.scrollIntoView({ behavior: 'smooth', block: 'center' }) },
-      el('span', {}, d.item_label)));
+  const W = frame.clientWidth, H = frame.clientHeight;
+  if (!W || !H) return;
+  const dots = [...$('mark-dots').children];
+  const spread = spreadDots(dots.map((d) => ({ x: d.dataset.x * W, y: d.dataset.y * H + 3 })),
+                            DOT_GAP, H - DOT - 3);
+  dots.forEach((d, i) => {
+    const x = Math.min(W - DOT / 2 - 3, Math.max(DOT / 2 + 3, spread[i].x));
+    d.style.left = `${x}px`;
+    d.style.top = `${Math.max(3, spread[i].y)}px`;
+  });
+}
+new ResizeObserver(placeDots).observe($('photo-boxes'));
+$('result-photo').addEventListener('load', placeDots);
+
+function applySelection() {
+  const sel = state.selected;
+  const frame = $('photo-boxes');
+  frame.classList.toggle('has-focus', Boolean(sel));
+  frame.classList.toggle('show-all', state.showBoxes);
+  frame.querySelectorAll('.mark-box').forEach((b) => b.classList.toggle('is-on', b.dataset.slot === sel));
+  frame.querySelectorAll('.mark-dot').forEach((d) => {
+    d.classList.toggle('is-on', d.dataset.slot === sel);
+    d.setAttribute('aria-pressed', String(d.dataset.slot === sel));
+  });
+  const mark = state.marks.find((m) => m.product.slot === sel);
+  const holes = (mark?.boxes || []).map((b) => `M${b.x1} ${b.y1}H${b.x2}V${b.y2}H${b.x1}Z`).join('');
+  $('photo-mask').querySelector('path').setAttribute('d', holes ? `M0 0H1V1H0Z${holes}` : '');
+  document.querySelectorAll('.cart-item').forEach((c) => {
+    c.classList.toggle('is-active', c.dataset.slot === sel);
+    c.querySelector('.cart-num')?.setAttribute('aria-pressed', String(c.dataset.slot === sel));
+  });
+}
+
+function select(slot, sticky) {
+  state.selected = slot;
+  state.sticky = Boolean(slot) && sticky;
+  applySelection();
+}
+
+function pickFromPhoto(slot) {
+  if (state.sticky && state.selected === slot) return select(null, false);
+  select(slot, true);
+  const card = $(`cart-${slot}`);
+  if (!card) return;
+  card.classList.remove('is-flash');
+  void card.offsetWidth;            // restart the highlight animation
+  card.classList.add('is-flash');
+  if (narrow()) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+// Tapping the photo outside a dot clears the selection.
+$('photo-boxes').addEventListener('click', () => { if (state.selected) select(null, false); });
+
+$('show-boxes').addEventListener('click', () => {
+  state.showBoxes = !state.showBoxes;
+  $('show-boxes').setAttribute('aria-checked', String(state.showBoxes));
+  applySelection();
+});
+
+const ARROW = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"/></svg>';
+
+function cartItem(m) {
+  const p = m.product;
+  const link = safeLink(p.product_url);
+  const card = el('div', { class: 'cart-item', id: `cart-${p.slot}`, 'data-slot': p.slot },
+    el('div', { class: 'cart-media product-media', 'data-initial': (p.name || '?').charAt(0) }, productImage(p)),
+    // click_url exactly as AISUM gave it: it carries the store's tracking parameters.
+    link ? el('a', { class: 'cart-link', href: link, target: '_blank', rel: 'noopener',
+                     title: p.name || p.item_label,
+                     'aria-label': `Shop ${m.n}. ${p.item_label}: ${p.name || ''}, ${money(p.price)} (opens in a new tab)`,
+                     onclick: () => { markHintSeen(); select(p.slot, true); } }) : null,
+    el('button', { type: 'button', class: 'cart-num', 'aria-pressed': 'false',
+                   'aria-label': `Show ${m.n}. ${p.item_label} on the photo`,
+                   onclick: () => {
+                     if (state.sticky && state.selected === p.slot) return select(null, false);
+                     select(p.slot, true);
+                     if (narrow()) $('photo-boxes').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                   } }, String(m.n)),
+    link ? el('span', { class: 'cart-go' }) : null,
+    el('span', { class: 'cart-price' }, money(p.price)),
+    el('span', { class: 'cart-shop' }, link ? 'Shop' : p.item_label));
+  card.querySelector('.cart-go')?.insertAdjacentHTML('afterbegin', ARROW);
+  if (canHover) {
+    card.addEventListener('mouseenter', () => { if (!state.sticky) select(p.slot, false); });
+    card.addEventListener('mouseleave', () => { if (!state.sticky) select(null, false); });
   }
+  card.addEventListener('focusin', () => { if (!state.sticky) select(p.slot, false); });
+  card.addEventListener('focusout', (e) => {
+    if (!state.sticky && !card.contains(e.relatedTarget)) select(null, false);
+  });
+  return card;
+}
+
+function renderCart(data) {
+  state.marks = cartMarks(data);
+  if (!state.marks.some((m) => m.product.slot === state.selected)) select(null, false);
+  renderMarks();
+  $('cart-board').replaceChildren(...state.marks.map(cartItem));
+  $('cart-hint').hidden = !state.marks.length || hintSeen();
+  $('cart-total').textContent = `Total ${money(data.total_price)} · Budget ${money(data.budget)}`;
+  applySelection();
 }
 
 function renderResult(data, previous) {
@@ -317,16 +439,9 @@ function renderResult(data, previous) {
   if (data.original_image && $('result-photo').src !== data.original_image) {
     $('result-photo').src = data.original_image;
   }
-  renderBoxes(data);
   $('download').hidden = data.category !== 'outfit' || !n;
 
-  $('cart-board').replaceChildren(...data.matched_products.map((p) => {
-    const link = safeLink(p.product_url);
-    return el(link ? 'a' : 'div', { class: 'cart-tile', href: link || undefined, target: link ? '_blank' : undefined, rel: link ? 'noopener' : undefined },
-      el('div', { class: 'product-media', 'data-initial': (p.name || '?').charAt(0) }, productImage(p)),
-      el('span', { class: 'cart-label' }, p.item_label),
-      el('span', { class: 'price' }, money(p.price)));
-  }));
+  renderCart(data);
   $('product-grid').replaceChildren(...data.matched_products.map((p) => productCard(p, changedTag(p))));
 
   $('unmatched-section').hidden = !data.unmatched_items.length;
@@ -432,6 +547,21 @@ function drawContain(ctx, img, x, y, w, h) {
   ctx.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
 }
 
+// The footer's QR code and address. static/ghostcart-qr.svg holds exactly this URL;
+// scripts/make_qr.py regenerates it, tests/test_lookboard_qr.py checks the two agree.
+const SITE_URL = 'https://app-103901851610.us-central1.run.app/ghostcart';
+const QR_MODULES = 45;   // version 5 with its 4-module border
+const QR_PX = 5;         // per module: 225 px, sharp edges, 202 px if shrunk to 1080 wide
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('QR code image did not load'));
+    img.src = src;
+  });
+}
+
 async function downloadBoard() {
   const data = state.data;
   if (!data) return;
@@ -439,7 +569,8 @@ async function downloadBoard() {
   btn.disabled = true;
   $('replan-msg').textContent = 'Building the image…';
   try {
-    const W = 1200, H = 900, PAD = 40, TOP = 90, BOTTOM = 90;
+    const W = 1200, BOARD_H = 900, PAD = 40, TOP = 90, BOTTOM = 90;
+    const QR = QR_MODULES * QR_PX, FOOT_PAD = 30, H = BOARD_H + QR + FOOT_PAD * 2;
     const zones = { head: [], top: [], bottom: [], feet: [], side: [] };
     for (const p of data.matched_products) zones[zoneOf(p.slot)].push(p);
     const rows = ROWS.filter((z) => zones[z].length);
@@ -447,16 +578,19 @@ async function downloadBoard() {
     const photoW = 520, itemsX = PAD + photoW + 30;
     const itemsW = (hasSide ? W - 200 - PAD : W - PAD) - itemsX;
     const slots = ['_photo', ...data.matched_products.map((p) => p.slot)];
-    const imgs = Object.fromEntries(await Promise.all(slots.map(async (s) => {
-      try { return [s, await boardImage(s)]; } catch { return [s, null]; }
-    })));
+    const [imgs, qr] = await Promise.all([
+      Promise.all(slots.map(async (s) => {
+        try { return [s, await boardImage(s)]; } catch { return [s, null]; }
+      })).then(Object.fromEntries),
+      loadImage("/static/ghostcart-qr.svg"),
+    ]);
 
     const c = el('canvas', { width: W, height: H });
     const ctx = c.getContext('2d');
     ctx.fillStyle = '#F8FAFC'; ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = '#0F172A'; ctx.font = '700 34px system-ui, sans-serif';
     ctx.fillText('GhostCart Lookboard', PAD, 58);
-    const areaH = H - TOP - BOTTOM;
+    const areaH = BOARD_H - TOP - BOTTOM;
     ctx.fillStyle = '#F1F5F9'; ctx.fillRect(PAD, TOP, photoW, areaH);
     if (imgs._photo) drawContain(ctx, imgs._photo, PAD, TOP, photoW, areaH);
 
@@ -485,12 +619,34 @@ async function downloadBoard() {
     }
     ctx.fillStyle = '#0F172A'; ctx.font = '700 32px system-ui, sans-serif';
     const total = money(data.total_price);
-    ctx.fillText(total, PAD, H - 36);
+    ctx.fillText(total, PAD, BOARD_H - 36);
     const tw = ctx.measureText(total).width;
     ctx.fillStyle = '#475569'; ctx.font = '20px system-ui, sans-serif';
-    ctx.fillText(`of ${money(data.budget)} budget`, PAD + tw + 12, H - 36);
+    ctx.fillText(`of ${money(data.budget)} budget`, PAD + tw + 12, BOARD_H - 36);
     ctx.fillStyle = '#475569'; ctx.font = '16px system-ui, sans-serif';
-    ctx.textAlign = 'right'; ctx.fillText('Powered by AISUM', W - PAD, H - 36); ctx.textAlign = 'left';
+    ctx.textAlign = 'right';
+    ctx.fillText('Product results powered by AISUM', W - PAD, BOARD_H - 36);
+    ctx.textAlign = 'left';
+
+    // Footer: name, line and address on the left; QR code on the right.
+    const footY = BOARD_H;
+    ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, footY, W, H - footY);
+    ctx.fillStyle = '#E2E8F0'; ctx.fillRect(0, footY, W, 2);
+    const mid = footY + (H - footY) / 2;
+    ctx.fillStyle = '#0F172A'; ctx.font = '700 44px system-ui, sans-serif';
+    ctx.fillText('GhostCart', PAD, mid - 22);
+    ctx.fillStyle = '#334155'; ctx.font = '24px system-ui, sans-serif';
+    ctx.fillText('Upload a look. Get it on budget.', PAD, mid + 18);
+    ctx.fillStyle = '#64748B'; ctx.font = '16px system-ui, sans-serif';
+    ctx.fillText(SITE_URL, PAD, mid + 54);
+    const qrX = W - PAD - QR, qrY = footY + FOOT_PAD;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(qr, qrX, qrY, QR, QR);
+    ctx.imageSmoothingEnabled = true;
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#475569'; ctx.font = '600 17px system-ui, sans-serif';
+    ctx.fillText('Scan with your camera · 用相机扫码打开', qrX - 18, mid + 6);
+    ctx.textAlign = 'left';
 
     const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
     const a = el('a', { href: URL.createObjectURL(blob), download: 'ghostcart-lookboard.png' });

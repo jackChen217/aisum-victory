@@ -81,6 +81,9 @@ def to_ui(data: dict, session: dict, comparison_image: str | None = None) -> dic
                 "item_label": _label(s["slot"]),
                 "description": d.get("item_detail") or s.get("query"),
                 "bounding_box": _box(d.get("box")),
+                # Best AISUM score of this detection's own products (display only: the
+                # page uses it to tell a duplicate or false box from the real one).
+                "score": d.get("top_score"),
                 "status": status,
                 "matched_product": by_slot.get(s["slot"]),
             })

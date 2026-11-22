@@ -59,6 +59,8 @@ Desk / Room：DeepSeek 看图拆清单 → 文字搜索 → 每个 slot 一次 L
 ## 页面
 
 - `/ghostcart` 是 Yining `ui-design-v1` 的设计接上真实接口（`static/ghostcart.html`、`ghostcart.js`、`styles.css`，数据来自 `?format=ui`）。框选、左右对比和未匹配列表是按她的样式新做的；她分支的 `test_data.js` 是带照片的批量导出，没有合并。
+- 结果页照片（`static/resultmarks.js`，纯函数有 Node 测试）：默认不画框，每件购物车商品一个编号圆点（box 顶部中间）；编号按购物车、照片里从上到下排。同一 slot 多个框：保留 AISUM 分最高的，另一个只有在大小相近、高度相近、分数 ≥ 最高的 70% 且不重叠时才算左右鞋留下（靠得近的一对共用一个点，分得开的各一个）；重叠的重复框和远处的误检丢掉。为此 `?format=ui` 的 `detected_items[]` 多了 `score`（该 detection 自己商品的最高分，只用于显示）。悬停/点卡片只显示该商品的框并压暗其他区域，点照片编号高亮卡片，"Show boxes" 显示全部框。卡片整张是原样的 `click_url`。
+- Lookboard 导出（1200 宽）底部有页脚和二维码：`static/ghostcart-qr.svg` 只含 `https://app-103901851610.us-central1.run.app/ghostcart`，容错 Q。换网址：改 `scripts/make_qr.py` 的 `URL` 和 `ghostcart.js` 的 `SITE_URL`，跑 `scripts/make_qr.py`；`tests/test_lookboard_qr.py` 检查两者一致且原图和 JPEG 60 都能解码（`scripts/check_lookboard_qr.py` 可检查真实导出图）。需要 `requirements-dev.txt` 里的 segno / zxing-cpp，没装就跳过。
 - `/classic` 是旧页面（`static/classic.html` + `classic.css`），功能相同，作兜底。`/` 和批量页仍用 `static/style.css`。
 - **`/102905f7b945d56af40e18fb57d9d994.txt` 是微信解封验证文件，必须永久保留，不要删除或修改，并且必须同时支持 GET 和 HEAD（都返回 200）。** 路由在 `src/main.py`（`wechat_verification`），原样返回纯文本 `49660d71b2a5f9874ff53248f7bb5402979df318`，不需要登录；`tests/test_wechat_verification.py` 检查它。四个页面（`/`、`/ghostcart`、`/classic`、`/ghostcart/batch`）也接受 HEAD（`tests/test_head_requests.py`），`/api/*` 仍然只接受各自的方法。
 

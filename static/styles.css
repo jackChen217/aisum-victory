@@ -1190,15 +1190,70 @@ body:not(.gated) #gate { display: none; }
 .photo-frame { display: flex; justify-content: center; }
 .photo-boxes { position: relative; display: inline-block; line-height: 0; }
 .photo-boxes img { display: block; max-height: 620px; border-radius: var(--radius-sm); }
-.det-box { position: absolute; padding: 0; border: 2px solid #fff; border-radius: 6px; background: transparent; box-shadow: 0 0 0 1.5px var(--ink); cursor: pointer; line-height: 1.2; }
-.det-box span { position: absolute; top: -1px; left: -1px; padding: 2px 6px; border-radius: 5px 0 5px 0; background: var(--ink); color: #fff; font: 600 10.5px/1.3 var(--font); white-space: nowrap; }
-.det-box.is-missing { border-style: dashed; box-shadow: 0 0 0 1.5px var(--err); }
-.det-box.is-missing span { background: var(--err); }
-.det-box:hover { background: rgba(255, 255, 255, .18); }
-.cart-board { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 14px; }
-.cart-tile { display: flex; flex-direction: column; gap: 3px; color: inherit; text-decoration: none; font-size: 12px; }
-.cart-tile .product-media { aspect-ratio: 1; margin-bottom: 5px; }
-.cart-label { color: var(--text-2); }
+
+/* Result photo: a numbered dot per cart item; boxes only for the selected item or with
+   "Show boxes" on. Dots and boxes are placed over the photo in its own 0-1 coordinates. */
+.photo-boxes { overflow: hidden; border-radius: var(--radius-sm); }
+.photo-boxes img { border-radius: 0; }
+.photo-mask { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; opacity: 0; transition: opacity .2s ease; }
+.photo-mask path { fill: rgba(15, 23, 42, .42); }
+.photo-boxes.has-focus .photo-mask { opacity: 1; }
+.mark-layer { position: absolute; inset: 0; pointer-events: none; }
+.mark-box { position: absolute; border: 1.5px solid #fff; border-radius: 4px; box-shadow: 0 0 0 1px rgba(15, 23, 42, .35); opacity: 0; transition: opacity .15s ease; }
+.photo-boxes.show-all .mark-box { opacity: .75; }
+.photo-boxes.has-focus.show-all .mark-box { opacity: .35; }
+.photo-boxes .mark-box.is-on { opacity: 1; }
+.mark-dot {
+  position: absolute; left: 0; top: 0; width: 22px; height: 22px; padding: 0;
+  transform: translateX(-50%); border: 0; border-radius: 50%;
+  background: rgba(255, 255, 255, .8); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  box-shadow: 0 1px 4px rgba(15, 23, 42, .28); color: var(--ink);
+  font: 700 11px/22px var(--font); text-align: center; cursor: pointer; pointer-events: auto;
+  transition: background .15s ease, color .15s ease, opacity .15s ease, transform .15s ease;
+}
+.mark-dot:hover { background: #fff; }
+.photo-boxes.has-focus .mark-dot { opacity: .5; }
+.photo-boxes .mark-dot.is-on { opacity: 1; background: var(--ink); color: #fff; transform: translateX(-50%) scale(1.12); }
+
+.box-toggle { display: inline-flex; align-items: center; gap: 8px; padding: 0; border: 0; background: none; color: var(--text-2); cursor: pointer; font: 600 12px/1 var(--font); }
+.box-toggle-track { position: relative; width: 30px; height: 18px; border-radius: 999px; background: var(--border-strong); transition: background .15s ease; }
+.box-toggle-track span { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(15, 23, 42, .25); transition: transform .15s ease; }
+.box-toggle[aria-checked="true"] { color: var(--text); }
+.box-toggle[aria-checked="true"] .box-toggle-track { background: var(--ink); }
+.box-toggle[aria-checked="true"] .box-toggle-track span { transform: translateX(12px); }
+
+/* Cart: a flat lay of cutouts, in photo order. The whole tile is the shop link. */
+.cart-hint { margin: -2px 0 12px; color: var(--muted); font-size: 12.5px; }
+.cart-board { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.cart-item { position: relative; display: flex; flex-direction: column; border-radius: var(--radius); transition: transform .18s ease; }
+.cart-media.product-media { aspect-ratio: 1; border-radius: var(--radius); background: #F4F5F7; transition: box-shadow .18s ease; }
+.cart-media.product-media img { padding: 12%; object-fit: contain; mix-blend-mode: multiply; }
+.cart-item:hover .cart-media img { transform: none; }
+.cart-link { position: absolute; inset: 0; z-index: 1; border-radius: var(--radius); }
+.cart-item:hover { transform: translateY(-3px); }
+.cart-item:hover .cart-media { box-shadow: var(--shadow-lift); }
+.cart-item.is-active .cart-media { box-shadow: 0 0 0 2px var(--ink); }
+.cart-item.is-flash .cart-media { animation: cart-flash .9s ease; }
+@keyframes cart-flash { 0% { box-shadow: 0 0 0 6px rgba(15, 23, 42, .25); } 100% { box-shadow: 0 0 0 2px var(--ink); } }
+.cart-num {
+  position: absolute; top: 8px; left: 8px; z-index: 2; width: 22px; height: 22px; padding: 0;
+  border: 0; border-radius: 50%; background: rgba(255, 255, 255, .85); box-shadow: 0 1px 3px rgba(15, 23, 42, .2);
+  color: var(--ink); font: 700 11px/22px var(--font); text-align: center; cursor: pointer;
+}
+.cart-item.is-active .cart-num { background: var(--ink); color: #fff; }
+.cart-go { position: absolute; top: 8px; right: 8px; display: grid; place-items: center; width: 22px; height: 22px; color: var(--text-2); pointer-events: none; }
+.cart-go svg { width: 15px; height: 15px; }
+.cart-item:hover .cart-go { color: var(--ink); }
+.cart-price { position: absolute; right: 8px; bottom: 30px; padding: 3px 9px; border-radius: 999px; background: #fff; box-shadow: 0 1px 3px rgba(15, 23, 42, .14); color: var(--ink); font: 700 12px/1.4 var(--font); pointer-events: none; }
+.cart-shop { padding: 6px 2px 0; color: var(--muted); font-size: 11.5px; line-height: 16px; }
+.cart-total { margin: 16px 0 0; padding-top: 14px; border-top: 1px solid var(--border); color: var(--text-2); font-size: 13.5px; }
+@media (max-width: 760px) {
+  .cart-board { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cart-item, .cart-item:hover { transform: none; transition: none; }
+  .cart-item.is-flash .cart-media { animation: none; }
+}
 
 .product-card.is-changed { border-color: var(--ink); }
 .product-size { margin-bottom: 8px; color: var(--muted); font-size: 11.5px; }

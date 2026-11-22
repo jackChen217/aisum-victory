@@ -187,6 +187,8 @@ def test_ui_format_for_plan_and_replan(fake):
             shoes = [d for d in ui["detected_items"] if d["slot"] == "shoe"]
             assert len(shoes) == 2 and all(d["matched_product"]["id"] == "shoe9" for d in shoes)
             assert shoes[0]["bounding_box"]["x1"] == 0.30
+            # Each detection's best product score, for the page to drop duplicate boxes.
+            assert all(isinstance(d["score"], float) for d in ui["detected_items"] if d["bounding_box"])
             bag = [d for d in ui["detected_items"] if d["slot"] == "bag"]
             assert bag[0]["status"] == "unmatched" and bag[0]["matched_product"] is None
             assert ui["unmatched_items"][0]["slot"] == "bag"
