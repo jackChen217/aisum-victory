@@ -111,3 +111,14 @@ summary { cursor: pointer; font-weight: 600; }
 .tip .ev { color: var(--event); margin-top: 4px; }
 .waiting { margin: 0; padding: 48px 16px; text-align: center; color: var(--text-secondary);
   border: 1px dashed var(--border); border-radius: 8px; }
+
+/* Finch: sources table and the completion-code check */
+#codes-input { width: 100%; box-sizing: border-box; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--surface-0); color: var(--text-primary); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; resize: vertical; }
+.codes-actions { display: flex; align-items: center; gap: 12px; margin-top: 8px; flex-wrap: wrap; }
+.codes-summary { font-size: 13px; color: var(--text-secondary); }
+.code-ok { color: var(--series-3); font-weight: 600; }
+.code-bad { color: var(--series-2); font-weight: 600; }
+#codes-table td:first-child { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.code-dup { color: var(--warn-ink); background: var(--warn-bg); font-weight: 600; }

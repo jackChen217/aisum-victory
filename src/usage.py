@@ -121,3 +121,36 @@ def log_finch(status: int, outcome: str, duration_ms: float, items: int = 0,
         "time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     print(json.dumps(line), file=sys.stdout, flush=True)
+
+
+# Where an account came from (src/finch_task.py): one line per account, the first time
+# it arrives with a known ?src=. /admin/stats counts new users by source from these.
+SOURCE_EVENT = "ghostcart_source"
+# A finch-sourced account finished its first Outfit plan (the Finch bounty task).
+FINCH_TASK_EVENT = "ghostcart_finch_task"
+
+
+def log_source(uid: str, source: str) -> None:
+    line = {
+        "severity": "INFO",
+        "message": f"{SOURCE_EVENT} {source}",
+        "event": SOURCE_EVENT,
+        "uid": uid,
+        "source": source,
+        "time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    print(json.dumps(line), file=sys.stdout, flush=True)
+
+
+def log_finch_task(uid: str, how: str) -> None:
+    """how: "plan" (own photo) or "gallery" (a gallery look)."""
+    line = {
+        "severity": "INFO",
+        "message": f"{FINCH_TASK_EVENT} completed {how}",
+        "event": FINCH_TASK_EVENT,
+        "uid": uid,
+        "outcome": "completed",
+        "how": how,
+        "time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    print(json.dumps(line), file=sys.stdout, flush=True)

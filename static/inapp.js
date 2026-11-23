@@ -1,6 +1,7 @@
 /* In-app browsers (WeChat, Instagram, ...): Google refuses to sign in inside them
  * (disallowed_useragent). Tell people to open the page in their real browser.
  * Loaded on every page. In a normal browser it does nothing. */
+import { linkWithSource } from './source.js';
 
 const APPS = [
   [/MicroMessenger/i, '微信', 'zh'],
@@ -95,8 +96,12 @@ function copyControls(words) {
   status.setAttribute('role', 'status');
   status.hidden = true;
   button.addEventListener('click', async () => {
-    const ok = await copy(location.href);
-    status.textContent = ok ? words.copied : `${words.failed} ${location.href}`;
+    // Keep ?src=finch in the copied link, so the real browser records the source too.
+    let storage = null;
+    try { storage = window.localStorage; } catch { /* blocked: copy the page as is */ }
+    const link = linkWithSource(location.href, storage);
+    const ok = await copy(link);
+    status.textContent = ok ? words.copied : `${words.failed} ${link}`;
     status.hidden = false;
   });
   return { button, status };

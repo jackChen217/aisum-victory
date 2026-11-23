@@ -11,6 +11,8 @@ service account; locally, your application-default credentials):
   added them.
 - Cloud Run's request log for POST /api/plan, for the days before that: daily totals
   only — no uid, no type, teammates included. Kept 30 days by default.
+- The `ghostcart_source` and `ghostcart_finch_task` lines (src/finch_task.py): new
+  users by where they came from (?src=finch), and Finch tasks completed.
 
 Emails are read only to filter users out, inside this module; nothing that leaves it
 names a person. The result is cached for 10 minutes.
@@ -124,6 +126,17 @@ async def fetch_plan_events(client, headers, since: datetime) -> list[dict]:
              "excluded": bool(e["jsonPayload"].get("excluded"))} for e in rows]
 
 
+async def fetch_events(client, headers, event: str, since: datetime) -> list[dict]:
+    """[{time, uid, source}] for one structured event (source lines, task lines)."""
+    rows = await _log_entries(
+        client, headers,
+        f'resource.type="cloud_run_revision" AND jsonPayload.event="{event}" '
+        f'AND timestamp>="{_iso(since)}"',
+        "timestamp,jsonPayload")
+    return [{"time": _parse(e["timestamp"]), "uid": e["jsonPayload"].get("uid"),
+             "source": e["jsonPayload"].get("source")} for e in rows]
+
+
 async def fetch_request_log(client, headers, since: datetime) -> list[datetime]:
     """Times of signed-in POST /api/plan requests in Cloud Run's request log."""
     rows = await _log_entries(
@@ -167,9 +180,40 @@ def _per_day(times, days) -> tuple[list[int], list[int]]:
     return new, cumulative
 
 
+# A source counts for a new user only if it was recorded this soon after the account
+# was made (the page sends it right after the first sign-in). Older accounts that
+# arrive through a source later are counted as existing, not new.
+SOURCE_WINDOW = timedelta(hours=1)
+
+
+def by_source(official: dict, sources: list[dict] | None,
+              tasks: list[dict] | None) -> dict:
+    """New official users per source ("direct" = no source), existing users who came
+    back through a source, and Finch tasks completed (official users only)."""
+    if sources is None:
+        return {"available": False}
+    first: dict[str, dict] = {}
+    for e in sorted(sources, key=lambda e: e["time"]):
+        if e["uid"] and e["source"]:
+            first.setdefault(e["uid"], e)
+    new, existing = Counter(), Counter()
+    for uid, created in official.items():
+        e = first.get(uid)
+        if e and e["time"] - created <= SOURCE_WINDOW:
+            new[e["source"]] += 1
+        else:
+            new["direct"] += 1
+            if e:
+                existing[e["source"]] += 1
+    done = {e["uid"] for e in tasks or [] if e["uid"] in official}
+    return {"available": True, "new_users": dict(new), "existing_users": dict(existing),
+            "finch_completed": len(done) if tasks is not None else None}
+
+
 def aggregate(users: list[dict] | None, events: list[dict] | None,
               request_log: list[datetime] | None, now: datetime,
-              errors: dict[str, str]) -> dict:
+              errors: dict[str, str], sources: list[dict] | None = None,
+              tasks: list[dict] | None = None) -> dict:
     """Everything the page draws. `None` for a source that could not be read.
 
     Two user counts:
@@ -230,6 +274,8 @@ def aggregate(users: list[dict] | None, events: list[dict] | None,
                      "structured_since": structured_since and _iso(structured_since)},
         "returning": {"count": returning, "active": len(plans_per_user), "total": total,
                       "share": returning / total if total else None},
+        "sources": (by_source(official, sources, tasks) if users is not None
+                    else {"available": False}),
         "team_excluded": bool(usage.team_emails()),
         "events": EVENTS,
         "notes": notes,
@@ -264,14 +310,34 @@ async def _collect() -> dict:
     async with httpx.AsyncClient(timeout=30) as client:
         results = await asyncio.gather(
             fetch_users(client, headers), fetch_plan_events(client, headers, LOG_SINCE),
-            fetch_request_log(client, headers, LOG_SINCE), return_exceptions=True)
-    for name, result in zip(("users", "plan_events", "request_log"), results):
+            fetch_request_log(client, headers, LOG_SINCE),
+            fetch_events(client, headers, usage.SOURCE_EVENT, LOG_SINCE),
+            fetch_events(client, headers, usage.FINCH_TASK_EVENT, LOG_SINCE),
+            return_exceptions=True)
+    names = ("users", "plan_events", "request_log", "sources", "finch_tasks")
+    for name, result in zip(names, results):
         if isinstance(result, BaseException):
             errors[name] = (str(result) if isinstance(result, SourceError)
                             else f"{type(result).__name__}: {result}")
             log_source_error(name, errors[name])
-    users, events, request_log = (None if isinstance(r, BaseException) else r for r in results)
-    return aggregate(users, events, request_log, datetime.now(timezone.utc), errors)
+    users, events, request_log, sources, tasks = (
+        None if isinstance(r, BaseException) else r for r in results)
+    return aggregate(users, events, request_log, datetime.now(timezone.utc), errors,
+                     sources, tasks)
+
+
+async def created_times() -> dict | None:
+    """{uid: account creation time} from the Firebase user list, None if it can't be
+    read (for the Finch code check; emails never leave fetch_users)."""
+    try:
+        headers = {"Authorization": f"Bearer {await asyncio.to_thread(_access_token)}",
+                   "x-goog-user-project": FIREBASE_PROJECT_ID}
+        async with httpx.AsyncClient(timeout=30) as client:
+            users = await fetch_users(client, headers)
+    except Exception as e:
+        log_source_error("users", str(e) if isinstance(e, SourceError) else type(e).__name__)
+        return None
+    return {u["uid"]: u["created"] for u in users}
 
 
 async def get_stats() -> dict:

@@ -65,6 +65,16 @@ Desk / Room：DeepSeek 看图拆清单 → 文字搜索 → 每个 slot 一次 L
 - 日志：每次一行 `event: ghostcart_finch`（`trigger: finch`，status、outcome、件数、耗时；没有 uid、邮箱、图片链接、token），`/admin/stats` 只数 `ghostcart_plan`，所以不算用户搜索。
 - 本地裁剪重搜会失败（签不了名，见图片上传），所以本地结果是只用第一次搜索的结果；Cloud Run 上正常。
 
+## Finch 悬赏任务：来源和完成码（`src/finch_task.py`、`static/source.js`）
+
+- 来源：`/ghostcart?src=finch` 把 `finch` 存进 localStorage（全部 try/catch，失败只留在内存），登录弹窗和页面跳转都不会丢；内置浏览器（`inapp.js`）复制的链接会带上 `?src=finch`。登录后 `POST /api/me/source` 每个账号只记第一次（bucket `finch/source/<uid>`，日志 `event: ghostcart_source`，只有 uid 和来源，没有邮箱）。只接受 `finch`。
+- 完成码：来源是 finch 的账号成功生成一次 Outfit 方案（上传或点 Gallery）后记 `finch/done/<uid>`（日志 `ghostcart_finch_task`，只记一次）。`GET /api/me/finch-code` 返回 `{source, code}`，登录后就会去取，换设备也能看到。码 = `GC-` + HMAC-SHA256(`FINCH_CODE_SECRET`, uid) 取 6 位（去掉 0/O/1/I），同一用户永远相同；没设密钥就没有码。**换密钥会让所有已发的码失效。**
+- `finch/` 前缀不在 bucket 的删除规则里（规则只删 `uploads/` 1 天、`gallery/` 30 天）。
+- `/admin/stats`：
+  - "New official users by source"：来源在账号创建 1 小时内记下才算该来源的新用户，更早的账号算 existing。还有 Finch 任务完成数。
+  - 核对完成码（`POST /api/admin/finch-codes`，只给管理员）：每个码返回有效/无效、粘贴次数（重复标出），有效的码再标 New user via Finch / Existing account（读不到用户列表时是 Unknown）。不返回 uid 或邮箱。
+- 码可以转给别人，核对只能证明它属于某个做完任务的账号。
+
 ## 页面
 
 - `/ghostcart` 是 Yining `ui-design-v1` 的设计接上真实接口（`static/ghostcart.html`、`ghostcart.js`、`styles.css`，数据来自 `?format=ui`）。框选、左右对比和未匹配列表是按她的样式新做的；她分支的 `test_data.js` 是带照片的批量导出，没有合并。

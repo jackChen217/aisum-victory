@@ -2,6 +2,7 @@
 // Prices, names and links are shown as the API returns them.
 import { cartMarks, spreadDots } from '/static/resultmarks.js';
 import { driver } from '/static/vendor/driver-1.14.0.mjs';
+import { markSent, rememberSource, wasSent } from '/static/source.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -46,6 +47,8 @@ const state = {
   selected: null,        // slot shown on the photo
   sticky: false,         // selected by a click, not just a hover
   showBoxes: false,
+  source: null,          // ?src= this visitor came with (kept in localStorage)
+  finchCode: null,       // Finch completion code, once the server has one
 };
 
 const announce = (msg) => { $('live').textContent = msg; };
@@ -66,6 +69,84 @@ async function api(path, options) {
 }
 const postJSON = (path, body) => api(path, { method: 'POST',
   headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+// ── Where the visitor came from (?src=finch) ─────────────────────────
+// Read before sign-in and kept in localStorage, so the popup sign-in, the history
+// entries this page pushes (they drop the query) and a reload don't lose it. Once
+// signed in it is sent to the server once per account (src/finch_task.py).
+const storage = (() => { try { return window.localStorage; } catch { return null; } })();
+state.source = rememberSource(location.search, storage);
+let sourceSending = null;
+
+function ensureSource() {
+  const user = window.__auth?.user;
+  if (!state.source || !user || wasSent(storage, user.uid)) return Promise.resolve();
+  if (!sourceSending) {
+    sourceSending = postJSON('/api/me/source', { source: state.source })
+      .then(() => markSent(storage, user.uid))
+      .catch((err) => console.info('[source]', err.message))
+      .finally(() => { sourceSending = null; });
+  }
+  return sourceSending;
+}
+
+// The Finch completion code: only for src=finch accounts, and the server answers with
+// a code only once that account has built an outfit plan.
+async function fetchFinchCode() {
+  try {
+    const r = await api('/api/me/finch-code', { method: 'GET' });
+    if (r.source && !state.source) {
+      // Recorded on another device or browser: remember it here too.
+      state.source = r.source;
+      try { storage.setItem('gc_src', r.source); } catch { /* memory only */ }
+    }
+    if (r.code) state.finchCode = r.code;
+  } catch (err) {
+    console.info('[finch-code]', err.message);
+  }
+  showFinchCode();
+}
+
+// After sign-in: record this browser's source first, then ask the server (it may know
+// the source and the code from another device even when this browser doesn't).
+async function checkFinchOnSignIn() {
+  await ensureSource();
+  await fetchFinchCode();
+}
+
+// After a new plan: only accounts known to come from Finch ask again.
+async function refreshFinchCode() {
+  if (!state.source && !state.finchCode) return;
+  if (!state.finchCode) await fetchFinchCode();
+  else showFinchCode();
+}
+
+function showFinchCode() {
+  $('finch-code').hidden = !state.finchCode;
+  $('finch-code-value').textContent = state.finchCode || '';
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const range = document.createRange();   // fallback: select it for ⌘C / long-press
+    range.selectNodeContents($('finch-code-value'));
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    return false;
+  }
+}
+$('finch-code-copy').addEventListener('click', async () => {
+  if (!state.finchCode) return;
+  const ok = await copyText(state.finchCode);
+  const btn = $('finch-code-copy');
+  btn.textContent = ok ? 'Copied' : 'Selected: press Copy';
+  announce(ok ? 'Code copied' : 'Code selected');
+  setTimeout(() => { btn.textContent = 'Copy code'; }, 2000);
+});
 
 // ── Category and gender ──────────────────────────────────────────────
 function setCategory(key) {
@@ -184,6 +265,7 @@ async function generate() {
     ? 'Finding each item… up to 12 s' : 'Reading the photo… up to a minute';
   announce('Building your plan');
   try {
+    await ensureSource();        // so a src=finch account's plan counts for its code
     const data = await postJSON('/api/plan?format=ui', {
       image_url: state.imageUrl, scenario: state.category, budget,
       ...(state.category === 'outfit' ? { gender } : {}) });
@@ -194,6 +276,7 @@ async function generate() {
     setupSlider(budget);
     nav.pushResult(null);        // before showResult scrolls to the top
     showResult();
+    refreshFinchCode();
   } catch (err) {
     formError(err.message);
   } finally {
@@ -279,6 +362,7 @@ async function openLook(look, tile, { record = true, refresh = true } = {}) {
       ? 'Building… up to 12 s' : 'Building… up to a minute';
   }, 1500);
   try {
+    await ensureSource();
     const data = await postJSON(`/api/gallery/${encodeURIComponent(look.id)}/open?format=ui`
                                 + (refresh ? '' : '&refresh=0'), {});
     clearPhoto();
@@ -295,6 +379,7 @@ async function openLook(look, tile, { record = true, refresh = true } = {}) {
     if (record) nav.pushResult(look.id);  // before showResult scrolls to the top
     else nav.rememberResult(look.id);
     showResult();
+    refreshFinchCode();
   } catch (err) {
     formError(err.message);
     tile?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -347,7 +432,12 @@ async function maybeTour() {
   }
 }
 window.addEventListener('authchange', (e) => {
-  if (!e.detail.user) return;
+  if (!e.detail.user) {
+    state.finchCode = null;   // signed out: the next account has its own code
+    showFinchCode();
+    return;
+  }
+  checkFinchOnSignIn();
   setTimeout(maybeTour, 400);
   galleryReady.then(() => nav.resume());
 });

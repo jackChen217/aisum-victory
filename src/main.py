@@ -43,7 +43,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
-from . import finch, gallery, image_proxy, llm_client, stats, uploads, usage
+from . import finch, finch_task, gallery, image_proxy, llm_client, stats, uploads, usage
 from .agent import comparison, orchestrator, planner, ui_format
 from .agent.orchestrator import SessionNotFound
 from .agent.outfit import PlanTimeout
@@ -166,6 +166,21 @@ def require_admin(authorization: str = Header(default="")) -> dict:
     if not usage.is_admin(claims):
         raise HTTPException(404, "Not Found")
     return claims
+
+
+class CodeCheck(BaseModel):
+    codes: list[str] = Field(max_length=finch_task.MAX_VERIFY)
+
+
+@app.post("/api/admin/finch-codes", include_in_schema=False)
+async def admin_finch_codes(req: CodeCheck, _: dict = Depends(require_admin)):
+    """Valid / invalid per pasted completion code; never whose code it is."""
+    try:
+        result = await finch_task.verify([c[:64] for c in req.codes],
+                                         await stats.created_times())
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    return JSONResponse(result, headers={"Cache-Control": "private, no-store"})
 
 
 @app.get("/api/admin/stats", include_in_schema=False)
@@ -430,6 +445,8 @@ async def plan(req: PlanRequest, request: Request, uid: str = Depends(require_us
     try:
         response = await _plan(req, uid, format)
         status = response.status_code if isinstance(response, Response) else 200
+        if status == 200 and req.scenario == "outfit":
+            await finch_task.mark_done(uid, "plan")   # only for src=finch accounts
         return response
     finally:
         # One line per call for /admin/stats: uid, type, status, time — never the email.
@@ -521,6 +538,8 @@ async def gallery_open(look_id: str, request: Request, uid: str = Depends(requir
         return _mcp_error(e)
     except (LlmError, httpx.HTTPError) as e:
         return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
+    if data.get("scenario") == "outfit":
+        await finch_task.mark_done(uid, "gallery")    # only for src=finch accounts
     if format != "ui":
         return data
     shaped = ui_format.to_ui(data, orchestrator.SESSIONS[(uid, data["session_id"])])
@@ -538,6 +557,27 @@ async def onboarding_get(uid: str = Depends(require_user)):
 async def onboarding_seen(uid: str = Depends(require_user)):
     await gallery.store().mark_seen(uid)
     return {"seen": True}
+
+
+class SourceRequest(BaseModel):
+    source: str = Field(max_length=32)
+
+
+@app.post("/api/me/source")
+async def me_source(req: SourceRequest, uid: str = Depends(require_user)):
+    """The ?src= this account first arrived with (src/finch_task.py). Recorded once."""
+    if req.source not in finch_task.SOURCES:
+        return JSONResponse({"error": "Unknown source."}, status_code=422)
+    return await finch_task.record_source(uid, req.source)
+
+
+@app.get("/api/me/finch-code")
+async def me_finch_code(uid: str = Depends(require_user)):
+    """The source this account has on record (null if none) and its Finch completion
+    code, once a src=finch account has built an outfit plan (null otherwise). The page
+    asks right after sign-in, so a new device or browser still shows the code."""
+    return {"source": await finch_task.source_of(uid),
+            "code": await finch_task.code_if_done(uid)}
 
 
 @app.delete("/api/me/onboarding", include_in_schema=False)

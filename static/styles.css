@@ -753,6 +753,38 @@ svg { display: block; }
 }
 .result-chip strong { color: var(--text); font-weight: 600; }
 
+/* Finch completion code (src=finch accounts, after their first outfit plan) */
+.finch-code {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: -8px 0 26px;
+  padding: 16px 20px;
+  border: 1px solid #A7F3D0;
+  border-radius: var(--radius);
+  background: var(--ok-bg);
+}
+.finch-code p { margin: 0; }
+.finch-code-label {
+  color: var(--ok);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.finch-code-value code {
+  display: inline-block;
+  margin: 4px 0 2px;
+  color: var(--text);
+  font: 700 26px/1.2 var(--mono);
+  letter-spacing: .06em;
+  user-select: all;
+}
+.finch-code-hint { color: var(--text-2); font-size: 13px; }
+.finch-code-copy { flex: none; min-width: 120px; }
+
 /* Replan card */
 .replan-card {
   position: relative;

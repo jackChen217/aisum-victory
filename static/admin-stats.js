@@ -23,6 +23,7 @@ const SERIES = [
 const OFFICIAL_RULE = 'Created on or after 11/8 13:00 PT, not @aisum.com';
 
 let data = null;
+let currentUser = null;
 const WAITING = 'Waiting for permission to read the user list';
 
 // ── Fetch ────────────────────────────────────────────────────────────────
@@ -42,8 +43,9 @@ async function main() {
     return;
   }
   const auth = getAuth(initializeApp(config));
-  onAuthStateChanged(auth, (user) => { if (user) load(user); });
+  onAuthStateChanged(auth, (user) => { currentUser = user; if (user) load(user); });
   $('refresh').addEventListener('click', () => auth.currentUser && load(auth.currentUser));
+  $('codes-check').addEventListener('click', checkCodes);
 }
 
 // ── Formatting ───────────────────────────────────────────────────────────
@@ -127,6 +129,80 @@ function render(d) {
     + 'Cached on the server for 10 minutes.';
   requestAnimationFrame(drawAll);  // after layout, so the charts get the real width
   renderTable(d);
+  renderSources(d.sources || { available: false });
+}
+
+// ── Finch: new users by source, completion codes ─────────────────────────
+
+const CATEGORY_LABEL = { finch_new: 'New user via Finch', existing: 'Existing account',
+  unknown: 'Unknown (no user list)' };
+const SOURCE_LABEL = { direct: 'Direct (no source)', finch: 'Finch (?src=finch)' };
+
+function cells(tag, values) {
+  const tr = document.createElement('tr');
+  for (const v of values) tr.append(Object.assign(document.createElement(tag), { textContent: v }));
+  return tr;
+}
+
+function renderSources(src) {
+  const table = $('sources-table');
+  table.replaceChildren();
+  if (!src.available) {
+    $('sources-hint').textContent = WAITING;
+    return;
+  }
+  $('sources-hint').textContent = 'Official users (est.) only. A user counts for a source if it '
+    + 'was recorded within an hour of the account being created; older accounts that came back '
+    + 'through a source are listed as existing.';
+  const keys = ['direct', 'finch', ...Object.keys(src.new_users).filter((k) => !(k in SOURCE_LABEL))];
+  table.append(cells('th', ['Source', 'New users', 'Existing users who came via it']));
+  for (const k of keys) {
+    table.append(cells('td', [SOURCE_LABEL[k] || k, String(src.new_users[k] || 0),
+      k === 'direct' ? '–' : String((src.existing_users || {})[k] || 0)]));
+  }
+  if (src.finch_completed != null) {
+    table.append(cells('td', ['Finch tasks completed', String(src.finch_completed), '']));
+  }
+}
+
+async function checkCodes() {
+  const codes = $('codes-input').value.split(/[\s,;]+/).map((c) => c.trim()).filter(Boolean);
+  const summary = $('codes-summary');
+  const table = $('codes-table');
+  if (!codes.length) { summary.textContent = 'Paste at least one code.'; table.hidden = true; return; }
+  if (!currentUser) { summary.textContent = 'Sign in on /ghostcart first.'; return; }
+  $('codes-check').disabled = true;
+  summary.textContent = 'Checking…';
+  try {
+    const r = await fetch('/api/admin/finch-codes', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${await currentUser.getIdToken()}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ codes }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+    const cat = body.categories || {};
+    summary.textContent = `${body.total} pasted · ${body.distinct} distinct · `
+      + `${body.valid} valid · ${body.invalid} invalid · ${body.duplicates} duplicated`
+      + ` · ${cat.finch_new || 0} new via Finch · ${cat.existing || 0} existing accounts`
+      + (cat.unknown ? ` · ${cat.unknown} unknown` : '')
+      + (body.users_available ? '' : ' (user list unreadable: new vs existing unknown)');
+    table.replaceChildren(cells('th', ['Code', 'Result', 'Pasted', 'Account']));
+    for (const row of body.results) {
+      const tr = cells('td', [row.code, row.valid ? 'Valid' : 'Invalid',
+        row.duplicate ? `${row.count}× (duplicate)` : '1×',
+        row.valid ? CATEGORY_LABEL[row.category] || row.category : '–']);
+      tr.children[1].className = row.valid ? 'code-ok' : 'code-bad';
+      if (row.duplicate) tr.children[2].className = 'code-dup';
+      table.append(tr);
+    }
+    table.hidden = false;
+  } catch (err) {
+    summary.textContent = `Couldn’t check the codes: ${err.message}`;
+    table.hidden = true;
+  } finally {
+    $('codes-check').disabled = false;
+  }
 }
 
 function tile(label, value, detail) {

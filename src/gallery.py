@@ -17,6 +17,7 @@ Storage: a local folder (scratch/local-store/, not in git) when not on Cloud Run
 upload bucket on Cloud Run, create-only objects:
     gallery/<look_id>/<epoch_ms>.json   newest wins
     onboarding/<uid>                    the first-visit tour was finished or skipped
+    finch/source/<uid>, finch/done/<uid>  Finch task records (src/finch_task.py)
 """
 from __future__ import annotations
 
@@ -110,6 +111,27 @@ class LocalStore:
     async def forget_seen(self, uid: str) -> None:
         (self.root / "onboarding" / uid).unlink(missing_ok=True)
 
+    # Small create-once records (src/finch_task.py): key -> text.
+    async def read(self, key: str) -> str | None:
+        f = self.root / key
+        return f.read_text() if f.is_file() else None
+
+    async def create(self, key: str, text: str) -> bool:
+        """False if the key already exists (never overwrites)."""
+        f = self.root / key
+        f.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(f, "x") as out:
+                out.write(text)
+        except FileExistsError:
+            return False
+        return True
+
+    async def names(self, prefix: str) -> list[str]:
+        """Keys under the folder `prefix` (ending in "/"), without the prefix."""
+        folder = self.root / prefix
+        return sorted(x.name for x in folder.iterdir() if x.is_file()) if folder.is_dir() else []
+
 
 class BucketStore:
     """The upload bucket on Cloud Run. Objects are only ever created, never overwritten
@@ -153,6 +175,31 @@ class BucketStore:
 
     async def forget_seen(self, uid: str) -> None:
         raise PermissionError("Resetting the tour is local-only.")
+
+    async def read(self, key: str) -> str | None:
+        def get():
+            from google.api_core.exceptions import NotFound
+            try:
+                return self._b().blob(key).download_as_text()
+            except NotFound:
+                return None
+        return await asyncio.to_thread(get)
+
+    async def create(self, key: str, text: str) -> bool:
+        def write():
+            from google.api_core.exceptions import PreconditionFailed
+            try:
+                self._b().blob(key).upload_from_string(text, content_type="application/json",
+                                                       if_generation_match=0)
+                return True
+            except PreconditionFailed:
+                return False
+        return await asyncio.to_thread(write)
+
+    async def names(self, prefix: str) -> list[str]:
+        def ls():
+            return sorted(b.name[len(prefix):] for b in self._b().list_blobs(prefix=prefix))
+        return await asyncio.to_thread(ls)
 
 
 _store = None

@@ -142,6 +142,7 @@ def test_failed_sources_go_to_the_server_log(monkeypatch, capsys):
     monkeypatch.setattr(stats, "fetch_users", denied)
     monkeypatch.setattr(stats, "fetch_plan_events", ok)
     monkeypatch.setattr(stats, "fetch_request_log", ok)
+    monkeypatch.setattr(stats, "fetch_events", ok)       # source / Finch task lines
     out = asyncio.run(stats._collect())
     assert out["users"]["available"] is False and set(out["errors"]) == {"users"}
     line = json.loads(capsys.readouterr().out)

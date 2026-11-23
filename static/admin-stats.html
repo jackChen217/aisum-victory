@@ -33,6 +33,21 @@
     <div class="chart" id="chart-new"></div>
   </section>
 
+  <section class="card" id="sources-card">
+    <h2>New official users by source</h2>
+    <p class="hint" id="sources-hint"></p>
+    <div class="table-wrap"><table id="sources-table"></table></div>
+  </section>
+  <section class="card">
+    <h2>Check Finch completion codes</h2>
+    <p class="hint">Paste codes, one per line or separated by spaces or commas. Shows valid / invalid, how often each code was pasted, and whether the account is a new user Finch brought (source recorded within an hour of sign-up) or an existing one. Never whose code it is.</p>
+    <textarea id="codes-input" rows="5" spellcheck="false" autocomplete="off" placeholder="GC-7K3P9Q&#10;GC-ABC234"></textarea>
+    <div class="codes-actions">
+      <button type="button" id="codes-check" class="btn">Check codes</button>
+      <span id="codes-summary" class="codes-summary" aria-live="polite"></span>
+    </div>
+    <div class="table-wrap"><table id="codes-table" hidden></table></div>
+  </section>
   <section class="card">
     <h2>Searches per day</h2>
     <div class="legend" id="legend-searches"></div>
