@@ -77,7 +77,9 @@ ALTERNATIVES = 3
 async def plan(uid: str, image_url: str, scenario: str, budget: float,
                owned: list[str] | None = None, notes: str = "",
                gender: str | None = None, desk_width: float | None = None,
-               desk_width_unit: str = "in") -> dict:
+               desk_width_unit: str = "in",
+               outfit_deadline_s: float | None = None,
+               gender_required: bool = True) -> dict:
     """The user picks `scenario` (outfit / desk / room); nothing is auto-detected.
     Outfit needs the user's `gender` (F / M / UNISEX).
 
@@ -85,10 +87,13 @@ async def plan(uid: str, image_url: str, scenario: str, budget: float,
             unmatched items set aside; no LLM, 12 s) -> knapsack.
     desk / room: DeepSeek slots -> text search -> one category check per slot ->
             knapsack; sizes read from product names and compared with `desk_width`.
-    The explanation is a template unless GENERATE_EXPLANATIONS is on."""
+    The explanation is a template unless GENERATE_EXPLANATIONS is on.
+    `outfit_deadline_s`: the outfit search deadline (None = outfit.DEADLINE_S, 12 s).
+    `gender_required=False` (Finch API): no gender means no gender filter."""
     if scenario not in SCENARIOS:
         raise planner.PlanError(f"Choose a category: {', '.join(SCENARIOS)}.")
-    if scenario == "outfit" and gender not in OUTFIT_GENDERS:
+    if scenario == "outfit" and gender not in OUTFIT_GENDERS and (
+            gender_required or gender is not None):
         raise planner.PlanError("Choose Women, Men or Unisex for an outfit.")
     owned = list(owned or [])
     image_url = await uploads.fresh(image_url)  # the page may resend an hour-old link
@@ -98,7 +103,7 @@ async def plan(uid: str, image_url: str, scenario: str, budget: float,
     desk_in = None
     if scenario == "outfit":
         slots, unmatched, candidates, scores, phase = await outfit.candidates(
-            image_url, budget, gender, report, started)
+            image_url, budget, gender, report, started, deadline_s=outfit_deadline_s)
         detected = started + phase["image_search"] / 1000
     else:
         gender = None

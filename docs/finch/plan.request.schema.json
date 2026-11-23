@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://app-103901851610.us-central1.run.app/docs/finch/plan.request.schema.json",
+  "title": "GhostCart Finch API: POST /api/finch/plan request",
+  "description": "One outfit photo and a budget. Send with the header 'Authorization: Bearer <token>'.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["image_url", "budget_usd"],
+  "properties": {
+    "image_url": {
+      "description": "A public https URL of a JPEG or PNG outfit photo. AISUM downloads it, so it must be reachable without cookies.",
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://[^\\s]+$",
+      "maxLength": 2048
+    },
+    "budget_usd": {
+      "description": "Budget for the whole outfit in US dollars. The items returned add up to at most this.",
+      "type": "number",
+      "minimum": 10,
+      "maximum": 2000
+    },
+    "gender": {
+      "description": "Optional, only when the shopper chose it: F (women) or M (men). Omit for no gender filter. null is not accepted.",
+      "type": "string",
+      "enum": ["F", "M"]
+    }
+  }
+}

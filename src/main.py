@@ -4,7 +4,9 @@ HTTP routes. The browser talks only to this server — never to MCP or the gatew
 Two reasons: the team's API keys must not reach the browser, and the MCP server
 sends no CORS headers, so a direct fetch from the page would be blocked anyway.
 
-Every /api/* route except /api/firebase-config needs a signed-in user (src/auth.py).
+Every /api/* route except /api/firebase-config needs a signed-in user (src/auth.py),
+except /api/finch/* (src/finch.py): the Finch marketplace's Direct API, which uses its
+own bearer token (FINCH_API_TOKEN) instead.
 
   /api/search/text    search_products_by_text        — one call
   /api/search/image   search_products_by_image        — one call
@@ -41,7 +43,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
-from . import gallery, image_proxy, llm_client, stats, uploads, usage
+from . import finch, gallery, image_proxy, llm_client, stats, uploads, usage
 from .agent import comparison, orchestrator, planner, ui_format
 from .agent.orchestrator import SessionNotFound
 from .agent.outfit import PlanTimeout
@@ -100,6 +102,7 @@ def page(name: str) -> HTMLResponse:
 
 
 app = FastAPI(title="AISUM Hackathon Starter Kit", lifespan=lifespan)
+app.include_router(finch.router)   # /api/finch/health, /api/finch/plan
 app.mount("/static", RevalidatedStatic(directory=STATIC), name="static")
 
 

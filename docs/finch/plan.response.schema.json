@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://app-103901851610.us-central1.run.app/docs/finch/plan.response.schema.json",
+  "title": "GhostCart Finch API: POST /api/finch/plan response (HTTP 200)",
+  "description": "Products that look like the items in the photo, picked so the total stays within the budget. Names, prices, images and click_url are AISUM's, unchanged; click_url carries affiliate tracking and must be used as is. No stock, size or material information is available.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["api_version", "budget_usd", "total_usd", "currency", "items", "unmatched", "open_url"],
+  "properties": {
+    "api_version": {"type": "string", "const": "1"},
+    "budget_usd": {"type": "number", "minimum": 10, "maximum": 2000},
+    "total_usd": {"description": "Sum of items[].price_usd; never above budget_usd.", "type": "number", "minimum": 0},
+    "currency": {"type": "string", "const": "USD"},
+    "items": {
+      "description": "One product per item worn in the photo (a left and right shoe are one item). Items that did not fit the budget are left out.",
+      "type": "array",
+      "items": {"$ref": "#/$defs/item"}
+    },
+    "unmatched": {
+      "description": "Items seen in the photo for which no similar product was found.",
+      "type": "array",
+      "items": {"$ref": "#/$defs/unmatched"}
+    },
+    "open_url": {"description": "GhostCart's page, for 'see more on GhostCart'.", "type": "string", "format": "uri"}
+  },
+  "$defs": {
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["category", "description", "product_name", "brand", "price_usd", "image_url", "click_url", "similarity_score"],
+      "properties": {
+        "category": {"description": "The item type AISUM detected, e.g. coat, pants, shoe, bag.", "type": "string"},
+        "description": {"description": "AISUM's description of the item in the photo, e.g. 'brown wool coat'.", "type": ["string", "null"]},
+        "product_name": {"type": "string"},
+        "brand": {"type": ["string", "null"]},
+        "price_usd": {"type": "number", "minimum": 0},
+        "image_url": {"type": ["string", "null"]},
+        "click_url": {"description": "The shop link exactly as AISUM returned it.", "type": ["string", "null"]},
+        "similarity_score": {"description": "AISUM image-search similarity (0-1, higher is closer). Comparable only within this response.", "type": ["number", "null"]}
+      }
+    },
+    "unmatched": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["category", "description", "message"],
+      "properties": {
+        "category": {"type": "string"},
+        "description": {"type": ["string", "null"]},
+        "message": {"type": "string"}
+      }
+    }
+  }
+}

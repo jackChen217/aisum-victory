@@ -24,6 +24,9 @@ PLAN_EVENT = "ghostcart_plan"
 # gallery_live (nothing cached yet: planned live), gallery_refresh (background AISUM run),
 # precompute (scripts/precompute_gallery.py).
 GALLERY_EVENT = "ghostcart_gallery"
+# Finch marketplace Direct API calls (src/finch.py). A separate event, so they are never
+# counted as a user search on the stats page. No uid of a person: Finch is one client.
+FINCH_EVENT = "ghostcart_finch"
 
 # Who may open /admin/stats. Comma-separated, verified Google emails.
 ADMIN_EMAILS_ENV = "ADMIN_EMAILS"
@@ -94,6 +97,27 @@ def log_gallery(uid: str, look_id: str, scenario: str, trigger: str, outcome: st
         "trigger": trigger,
         "outcome": outcome,
         "excluded": is_excluded_email((claims or {}).get("email")),
+        "time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    print(json.dumps(line), file=sys.stdout, flush=True)
+
+
+def log_finch(status: int, outcome: str, duration_ms: float, items: int = 0,
+              unmatched: int = 0, gender: str | None = None) -> None:
+    """One line per POST /api/finch/plan. outcome: ok, timeout, unauthorized, busy,
+    no_items, upstream_error, error. Never the image URL, a token or an email."""
+    line = {
+        "severity": "INFO",
+        "message": f"{FINCH_EVENT} {status} {outcome}",
+        "event": FINCH_EVENT,
+        "trigger": "finch",
+        "scenario": "outfit",
+        "status": status,
+        "outcome": outcome,
+        "gender": gender,
+        "items": items,
+        "unmatched": unmatched,
+        "duration_ms": round(duration_ms, 1),
         "time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     print(json.dumps(line), file=sys.stdout, flush=True)

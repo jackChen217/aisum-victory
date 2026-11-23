@@ -56,6 +56,15 @@ Desk / Room：DeepSeek 看图拆清单 → 文字搜索 → 每个 slot 一次 L
 - 数据源：用户列表要 `firebaseauth.users.get`，日志要 `logging.logEntries.list`（服务账号）。读不到用户列表时，用户数、回访和两张用户图都显示 "Waiting for permission to read the user list"（不显示 0）。哪个源失败页面上会写，同时往服务器日志写一行 `event: admin_stats_source_error`（source、error，邮箱会被遮掉）。
 - 图上的事件标注在 `src/stats.py` 的 `EVENTS`。
 
+## Finch Direct API（`/api/finch/*`，`src/finch.py`）
+
+- 给 Finch 市场的服务器对服务器接口，**不用 Google 登录**。`POST /api/finch/plan` 要 `Authorization: Bearer <FINCH_API_TOKEN>`（环境变量，`hmac.compare_digest` 比较；换 token 只改环境变量）。没带或不对 → 401；没设 `FINCH_API_TOKEN` → 一律 503（绝不放开）。先验 token 再验输入。`GET /api/finch/health` 不要登录。
+- 输入（多余字段拒绝，非法 422）：`image_url`（https）、`budget_usd`（数字 10–2000，字符串/布尔不收）、可选 `gender`（`F`/`M`；不传 = 不按性别筛，`null` 不收）。输出：`items[]`（category、description、product_name、brand、price_usd、image_url、原样的 click_url、similarity_score）、`total_usd`、`budget_usd`、`unmatched[]`、`open_url`（`/ghostcart?src=finch`）。Schema 和样例在 `docs/finch/`（draft 2020-12，所有 object 都是 `additionalProperties: false`）。
+- 走的就是网站的 Outfit 路径（`orchestrator.plan`，不分叉）。只多了两个参数：`outfit_deadline_s`（Finch 60 秒，网站仍 12 秒，因为 Finch 排队时间也算进截止时间）和 `gender_required=False`。整个请求 `asyncio.wait_for` 110 秒，超时 504。会话用 `_finch` uid，响应生成后马上删掉，不占内存。同时最多 4 个 Finch 请求，多了 429。
+- 限流（`src/agent/limits.py`）：三档。网站用户排队；Finch（`limits.finch()`）也排队，但在第二条队里，空出来的名额先给排队的用户，Finch 不会在有用户排队时拿名额；后台刷新只拿没人排队的空名额。
+- 日志：每次一行 `event: ghostcart_finch`（`trigger: finch`，status、outcome、件数、耗时；没有 uid、邮箱、图片链接、token），`/admin/stats` 只数 `ghostcart_plan`，所以不算用户搜索。
+- 本地裁剪重搜会失败（签不了名，见图片上传），所以本地结果是只用第一次搜索的结果；Cloud Run 上正常。
+
 ## 页面
 
 - `/ghostcart` 是 Yining `ui-design-v1` 的设计接上真实接口（`static/ghostcart.html`、`ghostcart.js`、`styles.css`，数据来自 `?format=ui`）。框选、左右对比和未匹配列表是按她的样式新做的；她分支的 `test_data.js` 是带照片的批量导出，没有合并。

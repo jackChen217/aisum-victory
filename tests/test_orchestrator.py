@@ -189,7 +189,7 @@ def test_explanation_still_inventing_falls_back(client, monkeypatch):
 def test_category_and_outfit_gender_are_required(client, fakes, monkeypatch):
     seen = []
 
-    async def outfit_candidates(image_url, budget, gender, report, started=None):
+    async def outfit_candidates(image_url, budget, gender, report, started=None, deadline_s=None):
         seen.append(gender)
         return [], [], {}, {}, {"image_search": 1, "crop_search": 0}
 

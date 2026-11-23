@@ -13,7 +13,9 @@
 
 Everything has to finish DEADLINE_S after the request starts. The first search must
 make it (else PlanTimeout); crop searches still running near the deadline are
-cancelled and those slots keep their first results.
+cancelled and those slots keep their first results. A caller may pass a longer
+`deadline_s` (the Finch API does: its searches queue behind website users, and the wait
+counts against the deadline).
 """
 from __future__ import annotations
 
@@ -99,18 +101,20 @@ async def _crop_search(photo, slot: dict, budget: float, gender: str | None) -> 
 
 
 async def candidates(image_url: str, budget: float, gender: str | None,
-                     report: dict, started: float | None = None):
+                     report: dict, started: float | None = None,
+                     deadline_s: float | None = None):
     """-> (slots to plan, unmatched slots, candidates, scores, timings_ms).
 
     candidates / scores cover every slot (unmatched ones too, for alternatives);
     quality = 1 / (1 + rank) in the order kept."""
     started = time.perf_counter() if started is None else started
-    deadline = started + DEADLINE_S
+    deadline_s = DEADLINE_S if deadline_s is None else deadline_s
+    deadline = started + deadline_s
     try:
         async with asyncio.timeout(max(0.1, deadline - time.perf_counter())):
             res = await planner.search_image(image_url, max_price=budget, gender=gender)
     except TimeoutError:
-        raise PlanTimeout(f"Image search took longer than {DEADLINE_S:g} seconds. "
+        raise PlanTimeout(f"Image search took longer than {deadline_s:g} seconds. "
                           "Please try again.") from None
     searched = time.perf_counter()
     if not res.get("detections"):
