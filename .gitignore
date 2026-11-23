@@ -22,3 +22,4 @@ scratch/
 !static/**/*.jpg
 ghostcart-batch-*.json
 eval_*.json
+!docs/images/*.jpg

@@ -1,130 +1,156 @@
-# AISUM Hackathon Starter Kit
+# GhostCart
 
-A small wiring example for AISUM Hackathon 2026. It shows four connections and
-nothing that decides what your product should be:
+**Upload one inspiration photo, set a budget, and GhostCart builds a cart of real products
+that recreates the look, then rebuilds it whenever the budget changes.**
 
-- Google sign-in with Firebase
-- Four product tools over MCP — text, image, scene and video — in two call patterns
-- One OpenAI-compatible LLM gateway call
-- Cloud Run deployment
+Live: <https://app-103901851610.us-central1.run.app/ghostcart> (requires a Google sign-in)
 
-This kit stops at the wiring. Anything that holds state between calls, decides
-what to call next, or presents results to a person is deliberately absent —
-that part is yours.
+Built for the AISUM Agent Bowl '26 on top of AISUM's product-search tools.
 
-The tools search a product catalog. What you build on top of them is open:
-the brief lists example directions, and they are examples, not requirements.
+## Features
 
-## The whole picture
+- **Three categories.** Outfit uses AISUM image search, with no LLM calls and a
+  12-second deadline. Desk and Room use DeepSeek to list the items in the photo, then
+  AISUM text search.
+- **The whole cart stays within budget.** An exact knapsack, computed in cents, picks
+  one product per item. Change the budget or swap in one of three alternatives, and the
+  rest of the cart is rebuilt without searching again.
+- **Gallery.** Ready-made looks open instantly from a stored plan. Behind the scenes,
+  GhostCart refreshes them with real AISUM searches, but only with capacity no user is
+  waiting for.
+- **Result photo.** Each Outfit cart item is numbered on the photo. Hover a product to
+  see where it is, or turn on "Show boxes" to see every box.
+- **Lookboard.** Download the photo and the cart as one image, with a QR code back to
+  the app.
+- **Little things:**
+  - a first-visit tour,
+  - the browser's Back / Forward buttons work,
+  - a notice in in-app browsers, where Google sign-in is blocked,
+  - an admin-only usage page.
 
-```text
- Browser  (static/)                       holds no keys
-    │
-    │  sign in with Google; every /api/* call carries the Firebase ID token
-    ▼
- This app  (src/main.py)                  your laptop now, Cloud Run later
-    │
-    │  1. check the token                 src/auth.py
-    │  2. call AISUM with your team's keys
-    │
-    ├─ src/mcp_client.py ─ MCP key ─> acts.aedi.ai/mcp  product tools
-    └─ src/llm_client.py ─ LLM key ─> acts.aedi.ai/llm  LLM gateway
-```
+| Home and gallery | Outfit result |
+| --- | --- |
+| ![GhostCart home page with the category picker and the outfit gallery](docs/images/home.jpg) | ![An outfit plan: the photo with numbered items next to the cart](docs/images/result.jpg) |
 
-| Tool | Give it | Get back | How long |
-|---|---|---|---|
-| `search_products_by_text` (AIMS) | a sentence or a whole article | matching products | instant |
-| `search_products_by_image` (AIRS) | a photo URL | the items found in it, each with its own matches | a few seconds |
-| `start_scene_match` → `get_scene_match_result` (AIMS) | a photo + a description | products that fit the situation | longer — it is a two-step job for a reason |
-| `start_video_match` → `get_video_match_result` (AEDI-V) | a YouTube URL | products per moment, with timestamps | minutes, not seconds — a video you have not used before takes the longest |
+## Tech stack
 
-What matters is the order of magnitude: a text search can sit inside any loop you
-like; a video job cannot — something has to wait for it.
+| Part | Uses |
+| --- | --- |
+| Backend | Python 3.11, FastAPI, Uvicorn, httpx, Pillow, NumPy |
+| Product search | AISUM MCP tools: `search_products_by_image`, `search_products_by_text` |
+| LLM | DeepSeek through an OpenAI-compatible gateway (Desk / Room only) |
+| Front end | Plain HTML / CSS / ES modules, driver.js (tour), Firebase Auth (Google sign-in) |
+| Cloud | Cloud Run (one instance), Cloud Storage (uploads and gallery plans), Cloud Logging (usage stats) |
+| Tests | pytest (offline), Node for the front-end pure functions |
 
-The tools accept more parameters than this example uses. The documentation you
-receive with your API key lists them.
+## Architecture
 
-## Run it locally
+[docs/architecture.md](docs/architecture.md) covers:
 
-The organizers give your team three keys — an **MCP key**, an **LLM key for your app**
-and an **LLM key for Claude Code** — and a Firebase project. Copy the template and fill in
-the MCP key, the app LLM key and the six `FIREBASE_*` values — the URLs and model name are
-already correct. The Claude Code key goes elsewhere, see [docs/claude-code.md](docs/claude-code.md):
+- the use cases,
+- a system diagram,
+- the modules,
+- the data flows for planning, the gallery cache, the AISUM priority queue and stats,
+- deployment,
+- known limits.
+
+## Run locally
+
+You need Python 3.11, [uv](https://docs.astral.sh/uv/), an AISUM MCP key, an
+OpenAI-compatible LLM key and a Firebase project with Google sign-in.
+
+1. Copy the settings template, then fill in your own values. `.env` is ignored by git;
+   never commit it.
+
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Install the dependencies and start the server:
+
+   ```bash
+   uv venv --python 3.11 .venv
+   uv pip install --python .venv/bin/python -r requirements.txt -r requirements-dev.txt
+   .venv/bin/python -m uvicorn src.main:app --reload
+   ```
+
+3. Open <http://localhost:8000/ghostcart> by typing it into the address bar. Use
+   `localhost`, not `127.0.0.1`, because Google sign-in only allows the listed domains.
+
+Optional steps:
+
+- Build the gallery plans into `scratch/local-store/`:
+
+  ```bash
+  .venv/bin/python scripts/precompute_gallery.py
+  ```
+
+- Run the tests (offline, with no AISUM or LLM calls):
+
+  ```bash
+  .venv/bin/python -m pytest tests
+  ```
+
+Two things work differently from Cloud Run:
+
+- **Uploads.** A local server can't sign bucket URLs, so test with public image links.
+- **The tour.** `?reset-tour` (local only) shows the tour again.
+
+Windows commands and step-by-step checks are in [docs/setup.md](docs/setup.md).
+Common errors are in [docs/troubleshooting.md](docs/troubleshooting.md).
+
+## Deploy
+
+GhostCart runs on Cloud Run, built from source. Cloud Run doesn't read `.env`, so first
+copy the settings into `env.yaml`, which git also ignores:
 
 ```bash
-cp .env.example .env
+grep -E '^[A-Z_]+=' .env | sed -E 's/^([A-Z_]+)=(.*)$/\1: "\2"/' > env.yaml
 ```
 
-| `.env` variable | What goes there |
-|---|---|
-| `MCP_API_KEY` | MCP key |
-| `OPENAI_API_KEY` | LLM key for your app |
-| `FIREBASE_*` | Firebase console → Project settings → General → Your apps → SDK setup and configuration → Config |
-
-All three keys are secrets: keep them in `.env` and `.claude/settings.local.json` only.
-The two LLM keys are not interchangeable — the app key does not work in Claude Code, and
-the Claude Code key does not work in your app. Then install and run.
-
-> **Two versions where commands differ.** macOS and Linux use the first block; Windows
-> uses the **PowerShell** block (not `cmd`). Commands shown once work on both.
-
-**macOS / Linux**
+Then deploy:
 
 ```bash
-uv venv --python 3.11 .venv
-uv pip install --python .venv/bin/python -r requirements.txt
-.venv/bin/python -m uvicorn src.main:app --reload
+gcloud run deploy app --source . --region us-central1 --allow-unauthenticated --env-vars-file env.yaml --max-instances=1
 ```
 
-**Windows (PowerShell)**
+Keep `--max-instances=1`. The limiter that keeps AISUM calls within the team's limits
+counts per process ([why](docs/architecture.md#54-aisum-priority-queue)). After the first
+deploy, `gcloud run deploy app --source . --region us-central1` keeps the existing
+environment variables.
 
-```powershell
-uv venv --python 3.11 .venv
-uv pip install --python .venv\Scripts\python.exe -r requirements.txt
-.venv\Scripts\python.exe -m uvicorn src.main:app --reload
-```
+The service account also needs access to the upload bucket and permission to sign URLs,
+as listed in [docs/architecture.md § Deployment](docs/architecture.md#6-deployment). The
+full walkthrough is in [docs/deploy.md](docs/deploy.md).
 
-Open <http://localhost:8000> — `localhost`, not the `127.0.0.1` Uvicorn prints;
-Google sign-in only works on `localhost` by default. Sign in first (checkpoint 1).
+## Credits
 
-Type that address into your browser yourself. If you run the app from VS Code's terminal
-and VS Code opens or offers a different address (the Ports tab, a `*.devtunnels.ms` link),
-sign-in fails with `auth/unauthorized-domain` there — those addresses are not on the list.
-Use `localhost`, or run the command from a plain PowerShell / Terminal window instead.
+- **[AISUM](https://aisum-agent-bowl.web.app/)** provides every product, price, image and
+  shop link, through its product-search tools. Thanks to the AISUM team for the tools,
+  the starter kit this project grew from, and the Agent Bowl.
+- **DeepSeek** (via the event's LLM gateway) splits Desk and Room photos into items and
+  checks product types.
 
-## Checkpoints — where are you?
+### Images
 
-| # | Check | It is working when | Details |
-|---|---|---|---|
-| 0 | MCP key | `curl …/status` returns your team name | [setup](docs/setup.md#checkpoint-0--mcp-key) |
-| 1 | Sign-in | your email appears in the header | [setup](docs/setup.md#checkpoint-1--sign-in) |
-| 2 | MCP tools | text, image, scene and video return JSON; scene and video poll one `task_id` | [setup](docs/setup.md#checkpoint-2--mcp-tools-from-the-app) |
-| 3 | LLM gateway | **One model call** shows an answer and `finish_reason: stop` | [setup](docs/setup.md#checkpoint-3--the-llm-gateway) |
-| 4 | One tool call | **One tool call, end to end**: step 1 `tool_calls`, step 4 `stop` | [setup](docs/setup.md#checkpoint-4--one-tool-call-end-to-end) |
-| 5 | Deploy | `gcloud` prints a `run.app` URL that shows this page | [deploy](docs/deploy.md#checkpoint-5--deploy) |
-| 6 | Deployed copy | checkpoints 1–4 work on that URL | [deploy](docs/deploy.md#checkpoint-6--the-deployed-copy) |
+- **Gallery photos.** They come from [Unsplash](https://unsplash.com) (Desk, Room and
+  some Outfit looks) and [Pexels](https://www.pexels.com) (most Outfit looks). They are
+  used under the [Unsplash License](https://unsplash.com/license) and the
+  [Pexels License](https://www.pexels.com/license/), and are loaded from those sites'
+  CDNs; this repository contains no copies.
+- **Credits.** Each photographer is credited in [static/gallery.json](static/gallery.json)
+  (`credit.name`, `credit.url`, `credit.page`), and the site links to both licences.
+- **Product images.** They belong to their retailers and are shown as AISUM returns them.
+- **Screenshots** in `docs/images/` are of this app. They contain a gallery photo by
+  거열 박 on [Pexels](https://www.pexels.com/photo/portrait-of-a-woman-standing-on-a-street-7600411/)
+  and product images from AISUM results.
 
-Coding with Claude Code against the same tools: [docs/claude-code.md](docs/claude-code.md).
-LLM budget left: `python -m src.budget` — see [troubleshooting](docs/troubleshooting.md#how-much-llm-budget-is-left).
-Something failed: [docs/troubleshooting.md](docs/troubleshooting.md) — search it for the
-exact error text.
+### Third-party code
 
-## File map — read in this order
-
-```text
-src/main.py         start here: every route, in the order of the page
-src/auth.py         checks the Firebase ID token on each /api/* request
-src/mcp_client.py   MCP handshake, session ID, SSE parsing, team-key header, tools/list
-src/llm_client.py   httpx POST to /chat/completions, optionally with tools
-src/budget.py       the team's LLM budget and spend: python -m src.budget
-src/config.py       all settings from .env, including Firebase's six public values
-static/app.js       the six cards, the scene and video polling loop
-static/auth.js      Firebase config fetch and Google sign-in
-```
-
-## Public-repository safety
-
-`.env`, `env.yaml` and `.claude/settings.local.json` are ignored by git — keep it that
-way, and never put a key in a file, URL, log or screenshot. The Firebase web config may
-be public; Firebase service-account credentials must not be. Share the kit by
-`git clone` only: a zip of a working folder carries your `.env`.
+| Library | Licence | How it is used |
+| --- | --- | --- |
+| [driver.js](https://github.com/nilbuild/driver.js) 1.14.0 | MIT | Bundled in `static/vendor/`; the licence text is in [static/vendor/LICENSES.txt](static/vendor/LICENSES.txt) |
+| Firebase JS SDK 12.4.0 | Apache-2.0 | Loaded from gstatic.com |
+| Google Fonts: Playfair Display, Plus Jakarta Sans | SIL OFL 1.1 | Loaded from fonts.googleapis.com |
+| FastAPI, Uvicorn, httpx, Pydantic, PyJWT, Pillow, NumPy, google-cloud-storage | MIT / BSD / Apache-2.0 / HPND | Python packages from `requirements.txt` |
+| segno, zxing-cpp | BSD-3-Clause / Apache-2.0 | Dev only: making and checking the Lookboard QR code |
