@@ -217,14 +217,13 @@ const GALLERY_MAX = 12;
 let opening = false;
 let galleryShown = null;
 
+// No gender label on the tile; the look's gender is still used for its search.
 function galleryTile(look) {
-  const who = look.gender ? `, ${GENDER_LABEL[look.gender]}` : '';
   const tile = el('button', { class: 'gallery-tile', type: 'button',
-      'aria-label': `Open the plan for ${look.title}${who}`,
+      'aria-label': `Open the plan for ${look.title}`,
       onclick: () => openLook(look, tile) },
     el('img', { src: photo(look, 700), alt: look.alt, loading: 'lazy' }),
     el('span', { class: 'tile-shade' }),
-    look.gender ? el('span', { class: 'tile-tag' }, GENDER_LABEL[look.gender]) : null,
     el('span', { class: 'tile-caption' }, el('strong', {}, look.title)),
     el('span', { class: 'tile-busy', 'aria-hidden': 'true' }, 'Opening…'));
   const c = look.credit || {};

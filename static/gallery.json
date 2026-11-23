@@ -1,5 +1,5 @@
 {
- "_about": "Gallery looks. Photos: Unsplash (Unsplash License, https://unsplash.com/license) and Pexels (Pexels License, https://www.pexels.com/license/), free for commercial use, no Unsplash+ or paid photos. Credits checked on each photo page 2026-11-22. \"source\": \"pexels\" marks a Pexels photo id; otherwise \"photo\" is an Unsplash id. Read by the page (static/ghostcart.js) and the server (src/gallery.py).",
+ "_about": "Gallery looks. Photos: Unsplash (Unsplash License, https://unsplash.com/license) and Pexels (Pexels License, https://www.pexels.com/license/), free for commercial use, no Unsplash+ or paid photos. Credits checked on each photo page 2026-11-22; the eight original outfit looks (restored 2026-11-23) credit Unsplash only, their photographers were not found. \"source\": \"pexels\" marks a Pexels photo id; otherwise \"photo\" is an Unsplash id. Read by the page (static/ghostcart.js) and the server (src/gallery.py).",
  "budgets": {
   "outfit": 200,
   "desk": 400,
@@ -7,17 +7,15 @@
  },
  "looks": [
   {
-   "id": "long-padded-coat",
+   "id": "sunshine-set",
    "category": "outfit",
-   "source": "pexels",
-   "photo": "7600411",
+   "photo": "photo-1515886657613-9f3515b0c78f",
    "gender": "F",
-   "title": "Long padded coat",
-   "alt": "Long grey padded coat with black trousers and white sneakers on a Korean street",
+   "title": "Sunshine set",
+   "alt": "Yellow sweatshirt and joggers with white boots",
    "credit": {
-    "name": "거열 박",
-    "url": "https://www.pexels.com/@geoyul/",
-    "page": "https://www.pexels.com/photo/portrait-of-a-woman-standing-on-a-street-7600411/"
+    "name": "Unsplash",
+    "url": "https://unsplash.com"
    }
   },
   {
@@ -35,17 +33,15 @@
    }
   },
   {
-   "id": "coat-wide-jeans",
+   "id": "powder-blue-coat",
    "category": "outfit",
-   "source": "pexels",
-   "photo": "16769471",
+   "photo": "photo-1539109136881-3be0616acf4b",
    "gender": "F",
-   "title": "Coat & wide jeans",
-   "alt": "Long dark coat over wide-leg jeans with a crossbody bag and sneakers",
+   "title": "Powder blue coat",
+   "alt": "Long blue coat with a tan bag",
    "credit": {
-    "name": "Muneeb Babar",
-    "url": "https://www.pexels.com/@muneeb-babar-1300535/",
-    "page": "https://www.pexels.com/photo/woman-in-coat-standing-with-cellphone-on-stairs-16769471/"
+    "name": "Unsplash",
+    "url": "https://unsplash.com"
    }
   },
   {
@@ -76,16 +72,15 @@
    }
   },
   {
-   "id": "brown-wool-coat",
+   "id": "burgundy-coat",
    "category": "outfit",
-   "photo": "photo-1606158850540-d631aad05cc0",
+   "photo": "photo-1483985988355-763728e1935b",
    "gender": "F",
-   "title": "Brown wool coat",
-   "alt": "Long brown wool coat over a black outfit among autumn leaves",
+   "title": "Burgundy coat",
+   "alt": "Burgundy coat and sunglasses",
    "credit": {
-    "name": "Javier Ezpeleta",
-    "url": "https://unsplash.com/@javierezpeleta",
-    "page": "https://unsplash.com/photos/woman-in-brown-coat-standing-on-snow-covered-ground-during-daytime-scTKCeHxaz0"
+    "name": "Unsplash",
+    "url": "https://unsplash.com"
    }
   },
   {
@@ -102,72 +97,63 @@
    }
   },
   {
-   "id": "brown-trench-walk",
+   "id": "striped-trousers",
    "category": "outfit",
-   "source": "pexels",
-   "photo": "28497025",
+   "photo": "photo-1509631179647-0177331693ae",
    "gender": "F",
-   "title": "Brown trench walk",
-   "alt": "Long brown trench coat over a black outfit, walking on a rainy day",
+   "title": "Striped trousers",
+   "alt": "Black striped trousers and a white top",
    "credit": {
-    "name": "Sofi Polishchuk",
-    "url": "https://www.pexels.com/@sofi-polishchuk-1772575385/",
-    "page": "https://www.pexels.com/photo/stylish-woman-walking-outdoors-in-trench-coat-28497025/"
+    "name": "Unsplash",
+    "url": "https://unsplash.com"
    }
   },
   {
-   "id": "beret-cardigan",
+   "id": "soft-denim",
    "category": "outfit",
-   "source": "pexels",
-   "photo": "31150426",
-   "gender": "F",
-   "title": "Beret & cardigan",
-   "alt": "Beret, cream cardigan with red trim, black mini skirt and a brown handbag",
-   "credit": {
-    "name": "Việt Anh Nguyễn",
-    "url": "https://www.pexels.com/@vi-t-anh-nguy-n-2150409023/",
-    "page": "https://www.pexels.com/photo/cozy-winter-fashion-outside-festive-cafe-31150426/"
-   }
-  },
-  {
-   "id": "seoul-black-coat",
-   "category": "outfit",
-   "source": "pexels",
-   "photo": "32014908",
-   "gender": "F",
-   "title": "Seoul black coat",
-   "alt": "Long black coat, black trousers and a brown bag on a downtown Seoul street",
-   "credit": {
-    "name": "Theodore Nguyen",
-    "url": "https://www.pexels.com/@thejourneyofframes/",
-    "page": "https://www.pexels.com/photo/street-scene-in-downtown-seoul-with-modern-architecture-32014908/"
-   }
-  },
-  {
-   "id": "camel-coat-scarf",
-   "category": "outfit",
-   "photo": "photo-1644006185483-c3bea82810df",
+   "photo": "photo-1516826957135-700dedea698c",
    "gender": "M",
-   "title": "Camel coat & scarf",
-   "alt": "Camel overcoat, plaid scarf, jeans and white sneakers on a snowy street",
+   "title": "Soft denim",
+   "alt": "Pale sweatshirt and ripped jeans",
    "credit": {
-    "name": "Fray Bekele",
-    "url": "https://unsplash.com/@frayb_",
-    "page": "https://unsplash.com/photos/a-man-standing-on-the-side-of-a-road-wearing-a-coat-XITosdOCS8Q"
+    "name": "Unsplash",
+    "url": "https://unsplash.com"
    }
   },
   {
-   "id": "olive-overcoat",
+   "id": "navy-suit",
    "category": "outfit",
-   "source": "pexels",
-   "photo": "34082634",
+   "photo": "photo-1617137968427-85924c800a22",
    "gender": "M",
-   "title": "Olive overcoat",
-   "alt": "Long olive overcoat over a dark outfit, walking on a city bridge",
+   "title": "Navy suit",
+   "alt": "Navy suit and brown shoes",
    "credit": {
-    "name": "César O'neill",
-    "url": "https://www.pexels.com/@cesar-o-neill-26650613/",
-    "page": "https://www.pexels.com/photo/man-in-overcoat-strolling-on-urban-bridge-34082634/"
+    "name": "Unsplash",
+    "url": "https://unsplash.com"
+   }
+  },
+  {
+   "id": "camel-layers",
+   "category": "outfit",
+   "photo": "photo-1552374196-1ab2a1c593e8",
+   "gender": "M",
+   "title": "Camel layers",
+   "alt": "Camel jacket over a white tee",
+   "credit": {
+    "name": "Unsplash",
+    "url": "https://unsplash.com"
+   }
+  },
+  {
+   "id": "street-jacket",
+   "category": "outfit",
+   "photo": "photo-1488161628813-04466f872be2",
+   "gender": "M",
+   "title": "Street jacket",
+   "alt": "Black jacket, tan trousers and white sneakers",
+   "credit": {
+    "name": "Unsplash",
+    "url": "https://unsplash.com"
    }
   },
   {
