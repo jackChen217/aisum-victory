@@ -1,6 +1,7 @@
 // GhostCart page: /api/upload, /api/plan?format=ui, /api/replan?format=ui.
 // Prices, names and links are shown as the API returns them.
 import { cartMarks, spreadDots } from '/static/resultmarks.js';
+import { driver } from '/static/vendor/driver-1.14.0.mjs';
 
 const $ = (id) => document.getElementById(id);
 
@@ -21,18 +22,12 @@ const money = (n) => '$' + Number(n).toLocaleString('en-US',
   { minimumFractionDigits: Number(n) % 1 ? 2 : 0, maximumFractionDigits: 2 });
 const safeLink = (u) => (/^https?:\/\//.test(u || '') ? u : null);
 
-// Public Unsplash photos. Each tile says who the look is for, so one tap has a gender.
-const photo = (id, w) => `https://images.unsplash.com/${id}?w=${w}&q=85&fm=jpg`;
-const GALLERY = [
-  { id: 'photo-1515886657613-9f3515b0c78f', gender: 'F', title: 'Sunshine set', alt: 'Yellow sweatshirt and joggers with white boots' },
-  { id: 'photo-1539109136881-3be0616acf4b', gender: 'F', title: 'Powder blue coat', alt: 'Long blue coat with a tan bag' },
-  { id: 'photo-1483985988355-763728e1935b', gender: 'F', title: 'Burgundy coat', alt: 'Burgundy coat and sunglasses' },
-  { id: 'photo-1509631179647-0177331693ae', gender: 'F', title: 'Striped trousers', alt: 'Black striped trousers and a white top' },
-  { id: 'photo-1516826957135-700dedea698c', gender: 'M', title: 'Soft denim', alt: 'Pale sweatshirt and ripped jeans' },
-  { id: 'photo-1617137968427-85924c800a22', gender: 'M', title: 'Navy suit', alt: 'Navy suit and brown shoes' },
-  { id: 'photo-1552374196-1ab2a1c593e8', gender: 'M', title: 'Camel layers', alt: 'Camel jacket over a white tee' },
-  { id: 'photo-1488161628813-04466f872be2', gender: 'M', title: 'Street jacket', alt: 'Black jacket, tan trousers and white sneakers' },
-];
+// Gallery photos are public Unsplash images; the looks are listed in static/gallery.json.
+// A look's photo is on Unsplash (default) or Pexels (look.source === 'pexels').
+const photo = (look, w) => (look.source === 'pexels'
+  ? `https://images.pexels.com/photos/${look.photo}/pexels-photo-${look.photo}.jpeg?auto=compress&cs=tinysrgb&w=${w}`
+  : `https://images.unsplash.com/${look.photo}?w=${w}&q=85&fm=jpg`);
+const SITE_NAME = (look) => (look.source === 'pexels' ? 'Pexels' : 'Unsplash');
 
 const GENDER_LABEL = { F: 'Women', M: 'Men', UNISEX: 'Unisex' };
 const STATUS_TEXT = { over_budget: 'over budget', owned: 'you already own this',
@@ -82,10 +77,13 @@ function setCategory(key) {
   });
   $('gender-row').hidden = key !== 'outfit';
   formError('');
+  renderGallery(key);
 }
 $('scene-chips').addEventListener('click', (e) => {
   const chip = e.target.closest('.scene-chip');
-  if (chip) setCategory(chip.dataset.category);
+  if (!chip || chip.dataset.category === state.category) return;
+  setCategory(chip.dataset.category);
+  nav.push({ view: 'search', category: chip.dataset.category });
 });
 
 // ── Upload: click, drag and drop, paste ──────────────────────────────
@@ -193,8 +191,9 @@ async function generate() {
     state.gender = state.category === 'outfit' ? gender : null;
     state.pins = {};
     renderResult(data, null);
-    showResult();
     setupSlider(budget);
+    nav.pushResult(null);        // before showResult scrolls to the top
+    showResult();
   } catch (err) {
     formError(err.message);
   } finally {
@@ -207,23 +206,153 @@ $('budget-input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); generate(); }
 });
 
-// ── Gallery ──────────────────────────────────────────────────────────
-function useLook(look) {
-  clearPhoto();
-  state.imageUrl = photo(look.id, 1080);
-  setPreview(photo(look.id, 700), look.title, 'Ready', 'ok');
-  setCategory('outfit');
-  $('gender').value = look.gender;
-  generate();
-}
-for (const look of GALLERY) {
-  $('gallery-grid').append(el('button', { class: 'gallery-tile', type: 'button',
-      'aria-label': `Build a plan from ${look.title}, ${GENDER_LABEL[look.gender]}`,
-      onclick: () => useLook(look) },
-    el('img', { src: photo(look.id, 700), alt: look.alt, loading: 'lazy' }),
+// ── Gallery: one grid that follows the category (Outfit on the home page) ──
+// Plans come from the server's cache (src/gallery.py); the looks from static/gallery.json.
+const GALLERY_TEXT = {
+  outfit: { title: 'Tap a look to build a plan at your budget', dot: 'dot-fashion' },
+  desk: { title: 'Desk setups: tap one to open its plan', dot: 'dot-gaming', beta: true },
+  room: { title: 'Rooms: tap one to open its plan', dot: 'dot-room', beta: true },
+};
+const GALLERY_MAX = 12;
+let opening = false;
+let galleryShown = null;
+
+function galleryTile(look) {
+  const who = look.gender ? `, ${GENDER_LABEL[look.gender]}` : '';
+  const tile = el('button', { class: 'gallery-tile', type: 'button',
+      'aria-label': `Open the plan for ${look.title}${who}`,
+      onclick: () => openLook(look, tile) },
+    el('img', { src: photo(look, 700), alt: look.alt, loading: 'lazy' }),
     el('span', { class: 'tile-shade' }),
-    el('span', { class: 'tile-caption' }, el('strong', {}, look.title))));
+    look.gender ? el('span', { class: 'tile-tag' }, GENDER_LABEL[look.gender]) : null,
+    el('span', { class: 'tile-caption' }, el('strong', {}, look.title)),
+    el('span', { class: 'tile-busy', 'aria-hidden': 'true' }, 'Opening…'));
+  const c = look.credit || {};
+  const credit = c.page
+    ? el('p', { class: 'tile-credit' }, 'Photo: ',
+        el('a', { href: c.url, target: '_blank', rel: 'noopener' }, c.name), ' · ',
+        el('a', { href: c.page, target: '_blank', rel: 'noopener' }, SITE_NAME(look)))
+    : el('p', { class: 'tile-credit' }, 'Photo: ',
+        el('a', { href: c.url || 'https://unsplash.com', target: '_blank', rel: 'noopener' }, c.name || 'Unsplash'));
+  return el('div', { class: 'gallery-item' }, tile, credit);
 }
+
+// Desk / Room looks show only once that category is picked; otherwise outfits.
+function renderGallery(category) {
+  const which = category === 'desk' || category === 'room' ? category : 'outfit';
+  if (!galleryLooks.size || which === galleryShown) return;
+  galleryShown = which;
+  const text = GALLERY_TEXT[which];
+  const looks = [...galleryLooks.values()].filter((l) => l.category === which).slice(0, GALLERY_MAX);
+  $('gallery-rows').replaceChildren(el('div', { class: 'gallery-row', 'data-category': which },
+    el('div', { class: 'gallery-row-head' },
+      el('h3', {}, el('span', { class: `dot ${text.dot}`, 'aria-hidden': 'true' }), text.title,
+         text.beta ? el('span', { class: 'beta' }, 'Beta') : null)),
+    el('div', { class: 'gallery-grid' }, ...looks.map(galleryTile))));
+}
+
+const galleryLooks = new Map();            // look id -> look, for Back/Forward
+
+async function loadGallery() {
+  try {
+    const doc = await (await fetch('/static/gallery.json')).json();
+    for (const l of doc.looks) galleryLooks.set(l.id, l);
+    renderGallery(state.category);
+  } catch (err) {
+    console.error('[gallery]', err);
+  }
+}
+const galleryReady = loadGallery();
+
+// record: add a history entry (false when Back/Forward brings a look back).
+// refresh: let the server refresh the look in the background (false when only
+// restoring it, so returning to a page never starts an AISUM search by itself).
+async function openLook(look, tile, { record = true, refresh = true } = {}) {
+  if (opening) return;
+  opening = true;
+  tile?.classList.add('is-busy');
+  if (tile) tile.querySelector('.tile-busy').textContent = 'Opening…';
+  formError('');
+  announce(`Opening ${look.title}`);
+  // A look with no saved plan yet is planned live; say so if it takes a while.
+  const slow = setTimeout(() => {
+    if (tile) tile.querySelector('.tile-busy').textContent = look.category === 'outfit'
+      ? 'Building… up to 12 s' : 'Building… up to a minute';
+  }, 1500);
+  try {
+    const data = await postJSON(`/api/gallery/${encodeURIComponent(look.id)}/open?format=ui`
+                                + (refresh ? '' : '&refresh=0'), {});
+    clearPhoto();
+    state.imageUrl = photo(look, 1080);
+    setPreview(photo(look, 700), look.title, 'Ready', 'ok');
+    setCategory(look.category);
+    if (look.gender) $('gender').value = look.gender;
+    $('budget-input').value = data.budget;
+    state.firstBudget = data.budget;
+    state.gender = look.category === 'outfit' ? look.gender : null;
+    state.pins = {};
+    renderResult(data, null);
+    setupSlider(data.budget);
+    if (record) nav.pushResult(look.id);  // before showResult scrolls to the top
+    else nav.rememberResult(look.id);
+    showResult();
+  } catch (err) {
+    formError(err.message);
+    tile?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } finally {
+    clearTimeout(slow);
+    tile?.classList.remove('is-busy');
+    opening = false;
+  }
+}
+
+// ── First-visit tour: once per account (stored by the server), Driver.js ──
+// Three steps on a computer, two on a phone. Left out on purpose: "Pick a category"
+// (the chips say it themselves, and Generate asks if none is picked) and a separate
+// "Set your budget" step (budget and Generate sit side by side, so one step covers both).
+const DESKTOP_STEPS = [
+  { element: '#photo-zone', popover: { title: 'Add a photo you love', description: 'Upload, drag in or paste (⌘V) any picture of the look.', side: 'left', align: 'start' } },
+  { element: '.search-actions', popover: { title: 'Set a budget, then build', description: 'We find real products that match, and the whole set fits your budget.', side: 'bottom', align: 'end' } },
+  { element: '.gallery', popover: { title: 'Or start from a look', description: 'Tap any look below to open its plan right away. Pick Desk or Room to see those instead.', side: 'top', align: 'start' } },
+];
+const PHONE_STEPS = [
+  { element: '#photo-zone', popover: { title: 'Add a photo you love', description: 'Or tap a look in the gallery further down.', side: 'bottom' } },
+  { element: '.search-actions', popover: { title: 'Set a budget, then build', description: 'Real products that match, all within budget.', side: 'top' } },
+];
+let tourChecked = false;
+
+async function maybeTour() {
+  if (tourChecked || !window.__auth?.user || $('search-view').hidden) return;
+  tourChecked = true;
+  try {
+    const params = new URLSearchParams(location.search);
+    if (params.has('reset-tour')) {
+      // Local testing only: the server answers 404 anywhere but this machine.
+      await api('/api/me/onboarding', { method: 'DELETE' }).catch((e) => console.info('[tour] reset:', e.message));
+      params.delete('reset-tour');
+      history.replaceState(history.state, '', location.pathname + (params.size ? `?${params}` : '') + location.hash);
+    }
+    const { seen } = await api('/api/me/onboarding', { method: 'GET' });
+    if (seen) return;
+    const steps = (narrow() ? PHONE_STEPS : DESKTOP_STEPS).filter((s) => document.querySelector(s.element));
+    const tour = driver({
+      steps, showProgress: true, allowClose: true, overlayOpacity: 0.55, stagePadding: 6,
+      stageRadius: 12, popoverClass: 'gc-tour', nextBtnText: 'Next', prevBtnText: 'Back',
+      doneBtnText: 'Done', progressText: '{{current}} of {{total}}',
+      // Finished or skipped: either way, don't show it again on any device.
+      onDestroyed: () => { postJSON('/api/me/onboarding', {}).catch(() => {}); },
+    });
+    tour.drive();
+  } catch (err) {
+    console.info('[tour]', err.message);
+  }
+}
+window.addEventListener('authchange', (e) => {
+  if (!e.detail.user) return;
+  setTimeout(maybeTour, 400);
+  galleryReady.then(() => nav.resume());
+});
+if (window.__auth?.user) setTimeout(maybeTour, 400);
 
 // ── Result ───────────────────────────────────────────────────────────
 function productImage(p) {
@@ -364,17 +493,18 @@ $('show-boxes').addEventListener('click', () => {
 
 const ARROW = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"/></svg>';
 
-function cartItem(m) {
+function cartItem(m, located) {
   const p = m.product;
   const link = safeLink(p.product_url);
+  const label = located ? `${m.n}. ${p.item_label}` : p.item_label;
   const card = el('div', { class: 'cart-item', id: `cart-${p.slot}`, 'data-slot': p.slot },
     el('div', { class: 'cart-media product-media', 'data-initial': (p.name || '?').charAt(0) }, productImage(p)),
     // click_url exactly as AISUM gave it: it carries the store's tracking parameters.
     link ? el('a', { class: 'cart-link', href: link, target: '_blank', rel: 'noopener',
                      title: p.name || p.item_label,
-                     'aria-label': `Shop ${m.n}. ${p.item_label}: ${p.name || ''}, ${money(p.price)} (opens in a new tab)`,
-                     onclick: () => { markHintSeen(); select(p.slot, true); } }) : null,
-    el('button', { type: 'button', class: 'cart-num', 'aria-pressed': 'false',
+                     'aria-label': `Shop ${label}: ${p.name || ''}, ${money(p.price)} (opens in a new tab)`,
+                     onclick: () => { markHintSeen(); if (located) select(p.slot, true); } }) : null,
+    !located ? null : el('button', { type: 'button', class: 'cart-num', 'aria-pressed': 'false',
                    'aria-label': `Show ${m.n}. ${p.item_label} on the photo`,
                    onclick: () => {
                      if (state.sticky && state.selected === p.slot) return select(null, false);
@@ -385,6 +515,7 @@ function cartItem(m) {
     el('span', { class: 'cart-price' }, money(p.price)),
     el('span', { class: 'cart-shop' }, link ? 'Shop' : p.item_label));
   card.querySelector('.cart-go')?.insertAdjacentHTML('afterbegin', ARROW);
+  if (!located) return card;          // nothing on the photo to point at
   if (canHover) {
     card.addEventListener('mouseenter', () => { if (!state.sticky) select(p.slot, false); });
     card.addEventListener('mouseleave', () => { if (!state.sticky) select(null, false); });
@@ -397,10 +528,16 @@ function cartItem(m) {
 }
 
 function renderCart(data) {
-  state.marks = cartMarks(data);
+  // Only outfit items have a place on the photo (AISUM image-search boxes). Desk and
+  // Room items come from a text list, so no boxes, dots or numbers that would suggest one.
+  const located = data.category === 'outfit';
+  state.marks = located ? cartMarks(data)
+    : data.matched_products.map((product, i) => ({ n: i + 1, product, boxes: [], dots: [] }));
+  if (!located) { state.showBoxes = false; $('show-boxes').setAttribute('aria-checked', 'false'); }
+  $('show-boxes').hidden = !located;
   if (!state.marks.some((m) => m.product.slot === state.selected)) select(null, false);
   renderMarks();
-  $('cart-board').replaceChildren(...state.marks.map(cartItem));
+  $('cart-board').replaceChildren(...state.marks.map((m) => cartItem(m, located)));
   $('cart-hint').hidden = !state.marks.length || hintSeen();
   $('cart-total').textContent = `Total ${money(data.total_price)} · Budget ${money(data.budget)}`;
   applySelection();
@@ -473,8 +610,124 @@ function showSearch() {
   $('search-view').hidden = false;
   window.scrollTo({ top: 0 });
 }
-$('back-to-search').addEventListener('click', showSearch);
-$('new-search').addEventListener('click', showSearch);
+function backToSearch() {
+  if (history.state?.gc && history.state.view === 'result' && history.state.depth > 0) {
+    history.back();                       // the same as the browser's Back button
+  } else {
+    nav.push({ view: 'search', category: state.category });
+    showSearch();
+  }
+}
+$('back-to-search').addEventListener('click', backToSearch);
+$('new-search').addEventListener('click', backToSearch);
+
+// ── Browser Back / Forward (and the phone's back gesture) ────────────
+// Each step is a history entry: a category picked, a result opened, back to the
+// gallery. Entries remember their scroll position. Results are kept in memory for
+// Back/Forward; after a reload, a gallery look is reopened from the server's cache
+// (no refresh, so nothing searches by itself) and an own-photo result, which can't be
+// rebuilt, falls back to the search page.
+const nav = (() => {
+  const results = new Map();               // key -> what renderResult needs
+  let seq = 0;
+  if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+
+  const url = (entry) => {
+    const q = new URLSearchParams(location.search);
+    for (const k of ['category', 'look', 'view']) q.delete(k);
+    if (entry.view === 'result') {
+      if (entry.look) q.set('look', entry.look); else q.set('view', 'result');
+    } else if (entry.category) {
+      q.set('category', entry.category);
+    }
+    return location.pathname + (q.size ? `?${q}` : '') + location.hash;
+  };
+  const here = () => (history.state?.gc ? history.state : null);
+  // Keep the current entry's scroll position up to date.
+  const saveScroll = () => {
+    if (here()) history.replaceState({ ...history.state, scroll: window.scrollY }, '');
+  };
+  let t = 0;
+  window.addEventListener('scroll', () => { clearTimeout(t); t = setTimeout(saveScroll, 120); },
+                          { passive: true });
+
+  function push(entry) {
+    clearTimeout(t);
+    saveScroll();
+    const depth = (here()?.depth ?? 0) + 1;
+    history.pushState({ gc: 1, depth, scroll: 0, ...entry }, '', url(entry));
+  }
+  function snapshot(look) {
+    return { data: state.data, look, firstBudget: state.firstBudget, gender: state.gender,
+             pins: state.pins, category: state.category, slider: Number($('slider').value) };
+  }
+  function pushResult(look) {
+    const key = `r${++seq}`;
+    results.set(key, snapshot(look));
+    push({ view: 'result', key, look, category: state.category });
+  }
+  function rememberResult(look) {           // the entry exists; just keep its result
+    const key = here()?.key || `r${++seq}`;
+    results.set(key, snapshot(look));
+    history.replaceState({ ...history.state, key }, '');
+  }
+  // Slider moves and swaps change the result shown in this entry.
+  function updateResult() {
+    const key = here()?.view === 'result' ? here().key : null;
+    if (key && results.has(key)) results.set(key, snapshot(results.get(key).look));
+  }
+  const restoreScroll = (y) => requestAnimationFrame(() => window.scrollTo(0, y || 0));
+
+  async function show(entry) {
+    if (entry.view === 'result') {
+      const r = results.get(entry.key);
+      if (r) {
+        state.firstBudget = r.firstBudget; state.gender = r.gender; state.pins = r.pins;
+        setCategory(r.category);
+        renderResult(r.data, null);
+        setupSlider(r.firstBudget);
+        $('slider').value = r.slider; $('slider-val').textContent = money(r.slider);
+        $('search-view').hidden = true; $('result-view').hidden = false;
+        restoreScroll(entry.scroll);
+        return;
+      }
+      const look = entry.look && galleryLooks.get(entry.look);
+      if (look && window.__auth?.user) {
+        await openLook(look, null, { record: false, refresh: false });
+        restoreScroll(entry.scroll);
+        return;
+      }
+      // An own-photo result after a reload: nothing to show, go to the search page.
+      history.replaceState({ gc: 1, depth: entry.depth, view: 'search', category: entry.category, scroll: 0 },
+                           '', url({ view: 'search', category: entry.category }));
+      entry = history.state;
+    }
+    setCategory(entry.category || null);
+    $('result-view').hidden = true; $('search-view').hidden = false;
+    restoreScroll(entry.scroll);
+  }
+  window.addEventListener('popstate', (e) => {
+    clearTimeout(t);
+    if (e.state?.gc) show(e.state);
+  });
+
+  // First entry: take the page's address as it is (?category=, ?look=).
+  function start() {
+    const q = new URLSearchParams(location.search);
+    const look = q.get('look');
+    const category = q.get('category');
+    const entry = look ? { view: 'result', look, key: null, category: null }
+                       : { view: 'search', category: ['outfit', 'desk', 'room'].includes(category) ? category : null };
+    history.replaceState({ gc: 1, depth: 0, scroll: 0, ...entry }, '', url(entry));
+    if (entry.view === 'search' && entry.category) setCategory(entry.category);
+  }
+  // After sign-in (or straight away if already signed in), bring back a ?look= entry.
+  function resume() {
+    const entry = here();
+    if (entry?.view === 'result' && !state.data) show(entry);
+  }
+  return { push, pushResult, rememberResult, updateResult, start, resume };
+})();
 
 // ── Replan: budget slider and swaps ──────────────────────────────────
 function setupSlider(budget) {
@@ -496,6 +749,7 @@ async function replan(budget, pins, message) {
     if (id !== state.requestId) return;   // a newer change is on its way
     state.pins = pins;
     renderResult(data, previous);
+    nav.updateResult();
     $('replan-msg').textContent = message;
     announce(message);
   } catch (err) {
@@ -663,3 +917,5 @@ async function downloadBoard() {
   }
 }
 $('download').addEventListener('click', downloadBoard);
+
+nav.start();

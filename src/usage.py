@@ -19,6 +19,11 @@ import sys
 from datetime import datetime, timezone
 
 PLAN_EVENT = "ghostcart_plan"
+# Gallery activity, kept apart from PLAN_EVENT so the stats page's search counts are
+# the users' own searches only. trigger: gallery_view (served from cache, no AISUM call),
+# gallery_live (nothing cached yet: planned live), gallery_refresh (background AISUM run),
+# precompute (scripts/precompute_gallery.py).
+GALLERY_EVENT = "ghostcart_gallery"
 
 # Who may open /admin/stats. Comma-separated, verified Google emails.
 ADMIN_EMAILS_ENV = "ADMIN_EMAILS"
@@ -67,8 +72,28 @@ def log_plan(uid: str, scenario: str, claims: dict | None, status: int) -> None:
         "event": PLAN_EVENT,
         "uid": uid,
         "scenario": scenario,
+        "trigger": "user",
         "excluded": is_excluded_email((claims or {}).get("email")),
         "status": status,
+        "time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    print(json.dumps(line), file=sys.stdout, flush=True)
+
+
+def log_gallery(uid: str, look_id: str, scenario: str, trigger: str, outcome: str,
+                claims: dict | None = None) -> None:
+    """One line per gallery open / refresh / precompute. outcome: ok, error, cancelled,
+    skipped_busy (no free AISUM slot), skipped_recent (refreshed in the last 10 min)."""
+    line = {
+        "severity": "INFO",
+        "message": f"{GALLERY_EVENT} {trigger} {look_id} {outcome}",
+        "event": GALLERY_EVENT,
+        "uid": uid,
+        "look_id": look_id,
+        "scenario": scenario,
+        "trigger": trigger,
+        "outcome": outcome,
+        "excluded": is_excluded_email((claims or {}).get("email")),
         "time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     print(json.dumps(line), file=sys.stdout, flush=True)

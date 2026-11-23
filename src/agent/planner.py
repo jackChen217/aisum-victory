@@ -25,7 +25,7 @@ import io
 import httpx
 
 from .. import image_proxy, llm_client
-from . import matching
+from . import limits, matching
 from ..llm_client import LlmError
 from ..mcp_client import McpClient, McpError
 
@@ -121,8 +121,9 @@ async def search_text(query: str, *, domain: str | list[str] | None = None,
     args = {"query": query, "domain": domain, "min_price": min_price,
             "max_price": max_price, "gender": gender, "top_k": top_k}
     mcp = await _client()
-    return await mcp.call_waiting_once("search_products_by_text",
-                                       {k: v for k, v in args.items() if v is not None})
+    async with limits.slot("search_products_by_text"):  # users wait; background work steps aside
+        return await mcp.call_waiting_once("search_products_by_text",
+                                           {k: v for k, v in args.items() if v is not None})
 
 
 async def search_image(image_url: str, *, min_price: float | None = None,
@@ -133,8 +134,9 @@ async def search_image(image_url: str, *, min_price: float | None = None,
     args = {"image_url": image_url, "min_price": min_price, "max_price": max_price,
             "gender": gender, "category": category, "top_k": top_k}
     mcp = await _client()
-    return await mcp.call_waiting_once("search_products_by_image",
-                                       {k: v for k, v in args.items() if v is not None})
+    async with limits.slot("search_products_by_image"):  # users wait; background work steps aside
+        return await mcp.call_waiting_once("search_products_by_image",
+                                           {k: v for k, v in args.items() if v is not None})
 
 
 async def aclose() -> None:

@@ -31,7 +31,9 @@ def test_ghostcart_loads_its_own_files_versioned(client):
     v = main.ASSET_VERSION
     for name in ("styles.css", "ghostcart.js", "auth.js", "inapp.js"):
         assert f"/static/{name}?v={v}" in html
-    assert "?v=2" not in html and "?v=3" not in html
+    # No hand-set version left over (?v=2", ?v=3"). Match the whole value: the content
+    # hash itself can start with a 2 or a 3.
+    assert not re.search(r'\?v=\d{1,3}"', html)
 
 
 def test_static_files_still_revalidate(client):

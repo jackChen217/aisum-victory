@@ -41,7 +41,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
-from . import image_proxy, llm_client, stats, uploads, usage
+from . import gallery, image_proxy, llm_client, stats, uploads, usage
 from .agent import comparison, orchestrator, planner, ui_format
 from .agent.orchestrator import SessionNotFound
 from .agent.outfit import PlanTimeout
@@ -423,6 +423,7 @@ def _shaped(data: dict, uid: str, fmt: str | None) -> dict:
 async def plan(req: PlanRequest, request: Request, uid: str = Depends(require_user),
                format: Literal["ui"] | None = None):
     status = 500  # stays 500 if _plan raises something unexpected
+    gallery.cancel_for(uid)  # the user's own search comes before their gallery refresh
     try:
         response = await _plan(req, uid, format)
         status = response.status_code if isinstance(response, Response) else 200
@@ -496,6 +497,57 @@ async def replan(req: ReplanRequest, uid: str = Depends(require_user),
                             status_code=404)
 
 
+# ── Gallery and the first-visit tour ─────────────────────────────────────
+
+@app.post("/api/gallery/{look_id}/open")
+async def gallery_open(look_id: str, request: Request, uid: str = Depends(require_user),
+                       format: Literal["ui"] | None = None, refresh: bool = True):
+    """A gallery look's stored plan as a new session of this user (no search), plus a
+    background refresh; planned live if nothing is stored yet (src/gallery.py).
+    refresh=0: no background refresh (the page restoring a look on Back / reload)."""
+    try:
+        data = await gallery.open_look(uid, look_id, getattr(request.state, "claims", None),
+                                       refresh=refresh)
+    except gallery.UnknownLook:
+        return JSONResponse({"error": "No such gallery look."}, status_code=404)
+    except PlanTimeout as e:
+        return JSONResponse({"error": str(e)}, status_code=504)
+    except PlanError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except McpError as e:
+        return _mcp_error(e)
+    except (LlmError, httpx.HTTPError) as e:
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
+    if format != "ui":
+        return data
+    shaped = ui_format.to_ui(data, orchestrator.SESSIONS[(uid, data["session_id"])])
+    shaped["gallery"] = data["gallery"]
+    return shaped
+
+
+@app.get("/api/me/onboarding")
+async def onboarding_get(uid: str = Depends(require_user)):
+    """Whether this account has finished or skipped the first-visit tour."""
+    return {"seen": await gallery.store().seen(uid)}
+
+
+@app.post("/api/me/onboarding")
+async def onboarding_seen(uid: str = Depends(require_user)):
+    await gallery.store().mark_seen(uid)
+    return {"seen": True}
+
+
+@app.delete("/api/me/onboarding", include_in_schema=False)
+async def onboarding_reset(request: Request, uid: str = Depends(require_user)):
+    """Local testing only: forget that this account saw the tour. 404 on Cloud Run and
+    for any request not from this machine."""
+    local = request.client is not None and request.client.host in ("127.0.0.1", "::1")
+    if uploads.on_cloud_run() or not local:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    await gallery.store().forget_seen(uid)
+    return {"seen": False}
+
+
 # ── Image upload ─────────────────────────────────────────────────────────
 
 @app.post("/api/upload")
@@ -505,6 +557,7 @@ async def upload(request: Request, uid: str = Depends(require_user)):
     Read in chunks and cut off past the limit, so an oversized upload is refused
     without holding all of it in memory.
     """
+    gallery.cancel_for(uid)  # an upload comes before their gallery refresh
     if not uploads.bucket_name():
         return JSONResponse({"error": "Uploads are not configured (UPLOAD_BUCKET)."},
                             status_code=503)

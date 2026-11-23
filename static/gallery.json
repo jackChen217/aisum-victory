@@ -1,0 +1,366 @@
+{
+ "_about": "Gallery looks. Photos: Unsplash (Unsplash License, https://unsplash.com/license) and Pexels (Pexels License, https://www.pexels.com/license/), free for commercial use, no Unsplash+ or paid photos. Credits checked on each photo page 2026-11-22. \"source\": \"pexels\" marks a Pexels photo id; otherwise \"photo\" is an Unsplash id. Read by the page (static/ghostcart.js) and the server (src/gallery.py).",
+ "budgets": {
+  "outfit": 200,
+  "desk": 400,
+  "room": 400
+ },
+ "looks": [
+  {
+   "id": "long-padded-coat",
+   "category": "outfit",
+   "source": "pexels",
+   "photo": "7600411",
+   "gender": "F",
+   "title": "Long padded coat",
+   "alt": "Long grey padded coat with black trousers and white sneakers on a Korean street",
+   "credit": {
+    "name": "거열 박",
+    "url": "https://www.pexels.com/@geoyul/",
+    "page": "https://www.pexels.com/photo/portrait-of-a-woman-standing-on-a-street-7600411/"
+   }
+  },
+  {
+   "id": "long-black-coat",
+   "category": "outfit",
+   "source": "pexels",
+   "photo": "8360936",
+   "gender": "F",
+   "title": "Long black coat",
+   "alt": "Long black wool coat over a dark outfit with black boots",
+   "credit": {
+    "name": "cottonbro studio",
+    "url": "https://www.pexels.com/@cottonbro/",
+    "page": "https://www.pexels.com/photo/a-woman-wearing-a-black-coat-8360936/"
+   }
+  },
+  {
+   "id": "coat-wide-jeans",
+   "category": "outfit",
+   "source": "pexels",
+   "photo": "16769471",
+   "gender": "F",
+   "title": "Coat & wide jeans",
+   "alt": "Long dark coat over wide-leg jeans with a crossbody bag and sneakers",
+   "credit": {
+    "name": "Muneeb Babar",
+    "url": "https://www.pexels.com/@muneeb-babar-1300535/",
+    "page": "https://www.pexels.com/photo/woman-in-coat-standing-with-cellphone-on-stairs-16769471/"
+   }
+  },
+  {
+   "id": "belted-camel-coat",
+   "category": "outfit",
+   "photo": "photo-1539533018447-63fcce2678e3",
+   "gender": "F",
+   "title": "Belted camel coat",
+   "alt": "Belted camel wool coat with black trousers and pale heels",
+   "credit": {
+    "name": "Bundo Kim",
+    "url": "https://unsplash.com/@bundo",
+    "page": "https://unsplash.com/photos/woman-wearing-brown-notched-lapel-coat-AhBR8UGvsGU"
+   }
+  },
+  {
+   "id": "white-knit-boots",
+   "category": "outfit",
+   "source": "pexels",
+   "photo": "19429823",
+   "gender": "F",
+   "title": "White knit & boots",
+   "alt": "White knit sweater, mini skirt and white boots with a dark coat over the arm",
+   "credit": {
+    "name": "Toàn Văn",
+    "url": "https://www.pexels.com/@vtnt2/",
+    "page": "https://www.pexels.com/photo/woman-standing-on-a-street-19429823/"
+   }
+  },
+  {
+   "id": "brown-wool-coat",
+   "category": "outfit",
+   "photo": "photo-1606158850540-d631aad05cc0",
+   "gender": "F",
+   "title": "Brown wool coat",
+   "alt": "Long brown wool coat over a black outfit among autumn leaves",
+   "credit": {
+    "name": "Javier Ezpeleta",
+    "url": "https://unsplash.com/@javierezpeleta",
+    "page": "https://unsplash.com/photos/woman-in-brown-coat-standing-on-snow-covered-ground-during-daytime-scTKCeHxaz0"
+   }
+  },
+  {
+   "id": "oversized-grey-coat",
+   "category": "outfit",
+   "photo": "photo-1739620620741-f7b23ede3149",
+   "gender": "F",
+   "title": "Oversized grey coat",
+   "alt": "Oversized light grey wool coat over black trousers",
+   "credit": {
+    "name": "Niloufar Mirhadi",
+    "url": "https://unsplash.com/@niloufarmirhadi",
+    "page": "https://unsplash.com/photos/a-woman-in-a-gray-coat-and-black-pants-rCQo5tPtbJY"
+   }
+  },
+  {
+   "id": "brown-trench-walk",
+   "category": "outfit",
+   "source": "pexels",
+   "photo": "28497025",
+   "gender": "F",
+   "title": "Brown trench walk",
+   "alt": "Long brown trench coat over a black outfit, walking on a rainy day",
+   "credit": {
+    "name": "Sofi Polishchuk",
+    "url": "https://www.pexels.com/@sofi-polishchuk-1772575385/",
+    "page": "https://www.pexels.com/photo/stylish-woman-walking-outdoors-in-trench-coat-28497025/"
+   }
+  },
+  {
+   "id": "beret-cardigan",
+   "category": "outfit",
+   "source": "pexels",
+   "photo": "31150426",
+   "gender": "F",
+   "title": "Beret & cardigan",
+   "alt": "Beret, cream cardigan with red trim, black mini skirt and a brown handbag",
+   "credit": {
+    "name": "Việt Anh Nguyễn",
+    "url": "https://www.pexels.com/@vi-t-anh-nguy-n-2150409023/",
+    "page": "https://www.pexels.com/photo/cozy-winter-fashion-outside-festive-cafe-31150426/"
+   }
+  },
+  {
+   "id": "seoul-black-coat",
+   "category": "outfit",
+   "source": "pexels",
+   "photo": "32014908",
+   "gender": "F",
+   "title": "Seoul black coat",
+   "alt": "Long black coat, black trousers and a brown bag on a downtown Seoul street",
+   "credit": {
+    "name": "Theodore Nguyen",
+    "url": "https://www.pexels.com/@thejourneyofframes/",
+    "page": "https://www.pexels.com/photo/street-scene-in-downtown-seoul-with-modern-architecture-32014908/"
+   }
+  },
+  {
+   "id": "camel-coat-scarf",
+   "category": "outfit",
+   "photo": "photo-1644006185483-c3bea82810df",
+   "gender": "M",
+   "title": "Camel coat & scarf",
+   "alt": "Camel overcoat, plaid scarf, jeans and white sneakers on a snowy street",
+   "credit": {
+    "name": "Fray Bekele",
+    "url": "https://unsplash.com/@frayb_",
+    "page": "https://unsplash.com/photos/a-man-standing-on-the-side-of-a-road-wearing-a-coat-XITosdOCS8Q"
+   }
+  },
+  {
+   "id": "olive-overcoat",
+   "category": "outfit",
+   "source": "pexels",
+   "photo": "34082634",
+   "gender": "M",
+   "title": "Olive overcoat",
+   "alt": "Long olive overcoat over a dark outfit, walking on a city bridge",
+   "credit": {
+    "name": "César O'neill",
+    "url": "https://www.pexels.com/@cesar-o-neill-26650613/",
+    "page": "https://www.pexels.com/photo/man-in-overcoat-strolling-on-urban-bridge-34082634/"
+   }
+  },
+  {
+   "id": "glow-desk",
+   "category": "desk",
+   "photo": "photo-1614624532983-4ce03382d63d",
+   "title": "Glow desk",
+   "alt": "Monitor on a wooden desk lit in pink and blue",
+   "credit": {
+    "name": "Linus Mimietz",
+    "url": "https://unsplash.com/@linusmimietz",
+    "page": "https://unsplash.com/photos/black-flat-screen-computer-monitor-on-brown-wooden-desk-gvptKmonylk"
+   }
+  },
+  {
+   "id": "white-gaming-desk",
+   "category": "desk",
+   "photo": "photo-1587831990711-23ca6441447b",
+   "title": "White gaming desk",
+   "alt": "Monitor, keyboard and game controllers on a white desk",
+   "credit": {
+    "name": "Sebastian Bednarek",
+    "url": "https://unsplash.com/@abeso",
+    "page": "https://unsplash.com/photos/computer-workspace-with-keyboard-and-controllers-x2Z0uNj-Quo"
+   }
+  },
+  {
+   "id": "night-desk",
+   "category": "desk",
+   "photo": "photo-1510519138101-570d1dca3d66",
+   "title": "Night desk",
+   "alt": "Dark desk with a monitor and keyboard",
+   "credit": {
+    "name": "Nikita Kachanovsky",
+    "url": "https://unsplash.com/@nkachanovskyyy",
+    "page": "https://unsplash.com/photos/a-desk-with-a-computer-monitor-and-keyboard-on-it-OVbeSXRk_9E"
+   }
+  },
+  {
+   "id": "wooden-workspace",
+   "category": "desk",
+   "photo": "photo-1575318634028-6a0cfcb60c59",
+   "title": "Wooden workspace",
+   "alt": "Laptop, monitor and keyboard on a wooden desk",
+   "credit": {
+    "name": "Max Andrey",
+    "url": "https://unsplash.com/@maxandrey",
+    "page": "https://unsplash.com/photos/home-office-workspace-with-wooden-desk-TlRQin0iwjE"
+   }
+  },
+  {
+   "id": "plant-gaming-setup",
+   "category": "desk",
+   "photo": "photo-1616440347437-b1c73416efc2",
+   "title": "Plant gaming setup",
+   "alt": "Two monitors, a gaming PC and plants on a desk",
+   "credit": {
+    "name": "Roberto Nickson",
+    "url": "https://unsplash.com/@rpnickson",
+    "page": "https://unsplash.com/photos/black-flat-screen-computer-monitor-on-white-wooden-desk-Gvm2wM3V5PA"
+   }
+  },
+  {
+   "id": "green-study",
+   "category": "desk",
+   "photo": "photo-1600494603989-9650cf6ddd3d",
+   "title": "Green study",
+   "alt": "Home office with a wooden desk, black chair and green walls",
+   "credit": {
+    "name": "Collov Home Design",
+    "url": "https://unsplash.com/@collovhome",
+    "page": "https://unsplash.com/photos/home-office-with-green-walls-UUsQk_9bdR8"
+   }
+  },
+  {
+   "id": "standing-desk",
+   "category": "desk",
+   "photo": "photo-1623177623442-979c1e42c255",
+   "title": "Standing desk",
+   "alt": "Wooden standing desk with a monitor and keyboard",
+   "credit": {
+    "name": "ergonofis",
+    "url": "https://unsplash.com/@ergonofis",
+    "page": "https://unsplash.com/photos/wooden-standing-desk-in-home-office-tdnYk4qOGhc"
+   }
+  },
+  {
+   "id": "bright-desk",
+   "category": "desk",
+   "photo": "photo-1499951360447-b19be8fe80f5",
+   "title": "Bright desk",
+   "alt": "Laptop beside a white iMac and a plant on a light desk",
+   "credit": {
+    "name": "Domenico Loia",
+    "url": "https://unsplash.com/@domenicoloia",
+    "page": "https://unsplash.com/photos/macbook-pro-on-table-beside-white-imac-and-magic-mouse-hGV2TfOh0ns"
+   }
+  },
+  {
+   "id": "calm-living-room",
+   "category": "room",
+   "photo": "photo-1583847268964-b28dc8f51f92",
+   "title": "Calm living room",
+   "alt": "Pale living room with a sofa, round tables and a large window",
+   "credit": {
+    "name": "Minh Pham",
+    "url": "https://unsplash.com/@minhphamdesign",
+    "page": "https://unsplash.com/photos/a-living-room-filled-with-furniture-and-a-large-window-OtXADkUh3-I"
+   }
+  },
+  {
+   "id": "tan-sectional",
+   "category": "room",
+   "photo": "photo-1616047006789-b7af5afb8c20",
+   "title": "Tan sectional",
+   "alt": "Living room with a tan leather sectional sofa and a patterned rug",
+   "credit": {
+    "name": "Spacejoy",
+    "url": "https://unsplash.com/@spacejoy",
+    "page": "https://unsplash.com/photos/living-room-with-tan-leather-sectional-sofa-umAXneH4GhA"
+   }
+  },
+  {
+   "id": "marble-fireplace",
+   "category": "room",
+   "photo": "photo-1598928506311-c55ded91a20c",
+   "title": "Marble fireplace",
+   "alt": "Living room with a marble fireplace, white sofas and dark shelving",
+   "credit": {
+    "name": "Lotus Design N Print",
+    "url": "https://unsplash.com/@lotusdnp",
+    "page": "https://unsplash.com/photos/living-room-with-marble-fireplace-WgkA3CSFrjc"
+   }
+  },
+  {
+   "id": "grey-sofa",
+   "category": "room",
+   "photo": "photo-1605774337664-7a846e9cdf17",
+   "title": "Grey sofa",
+   "alt": "Grey two-seat sofa near a wooden coffee table",
+   "credit": {
+    "name": "Katja Rooke",
+    "url": "https://unsplash.com/@rooke",
+    "page": "https://unsplash.com/photos/gray-2-seat-sofa-near-brown-wooden-coffee-table-77JACslA8G0"
+   }
+  },
+  {
+   "id": "warm-lounge",
+   "category": "room",
+   "photo": "photo-1618221195710-dd6b41faaea6",
+   "title": "Warm lounge",
+   "alt": "White and brown living room set by a long window",
+   "credit": {
+    "name": "Spacejoy",
+    "url": "https://unsplash.com/@spacejoy",
+    "page": "https://unsplash.com/photos/white-and-brown-living-room-set-9M66C_w_ToM"
+   }
+  },
+  {
+   "id": "city-bedroom",
+   "category": "room",
+   "photo": "photo-1616594039964-ae9021a400a0",
+   "title": "City bedroom",
+   "alt": "Bedroom with a white upholstered bed and a gold chandelier",
+   "credit": {
+    "name": "Spacejoy",
+    "url": "https://unsplash.com/@spacejoy",
+    "page": "https://unsplash.com/photos/modern-bedroom-with-white-upholstered-bed-RUvW1KGD9a4"
+   }
+  },
+  {
+   "id": "grey-bedroom",
+   "category": "room",
+   "photo": "photo-1560185893-a55cbc8c57e8",
+   "title": "Grey bedroom",
+   "alt": "Bedroom with dark grey walls, a large bed and a floral rug",
+   "credit": {
+    "name": "Francesca Tosolini",
+    "url": "https://unsplash.com/@fromitaly",
+    "page": "https://unsplash.com/photos/bedroom-with-dark-grey-walls-hCU4fimRW-c"
+   }
+  },
+  {
+   "id": "blue-headboard",
+   "category": "room",
+   "photo": "photo-1566665797739-1674de7a421a",
+   "title": "Blue headboard",
+   "alt": "Bedroom with a blue upholstered headboard and wooden blinds",
+   "credit": {
+    "name": "mark champs",
+    "url": "https://unsplash.com/@markchamps21",
+    "page": "https://unsplash.com/photos/modern-bedroom-with-blue-headboard-Id2IIl1jOB0"
+   }
+  }
+ ]
+}
