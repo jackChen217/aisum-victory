@@ -2,7 +2,7 @@
 
     GET  /api/finch/health   anonymous, {"status": "ok", ...}
     POST /api/finch/plan     Authorization: Bearer <FINCH_API_TOKEN>
-                             {"image_url", "budget_usd", "gender"?} -> items in budget
+                             {"image_url", "budget_usd"?, "gender"?} -> items in budget
 
 The plan is the website's outfit path, unchanged (orchestrator.plan -> outfit.candidates:
 one AISUM image search, left/right shoe merged, crop re-search for weak items, unmatched
@@ -53,6 +53,7 @@ TOTAL_TIMEOUT_S = 110.0     # under Finch's 120 s, with room to build and send t
 OUTFIT_DEADLINE_S = 60.0    # first image search incl. waiting behind website users
 MAX_CONCURRENT = 4
 MIN_BUDGET, MAX_BUDGET = 10, 2000
+DEFAULT_BUDGET = 200.0      # when budget_usd is left out
 API_VERSION = "1"
 
 router = APIRouter(prefix="/api/finch")
@@ -63,8 +64,8 @@ class FinchPlanRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     image_url: str = Field(max_length=2048)
-    # strict: a number, not "100" or true
-    budget_usd: Annotated[float, Field(strict=True, ge=MIN_BUDGET, le=MAX_BUDGET)]
+    # Optional (default DEFAULT_BUDGET). strict: a number, not "100", true or null.
+    budget_usd: Annotated[float, Field(strict=True, ge=MIN_BUDGET, le=MAX_BUDGET)] = DEFAULT_BUDGET
     # Omitted = no gender filter. null is refused, like the schema says.
     gender: Literal["F", "M"] = None  # type: ignore[assignment]
 

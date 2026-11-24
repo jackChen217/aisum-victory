@@ -129,7 +129,7 @@ BAD_INPUTS = {
     "budget too high": {**EXAMPLE, "budget_usd": 2000.01},
     "budget as string": {**EXAMPLE, "budget_usd": "200"},
     "budget as bool": {**EXAMPLE, "budget_usd": True},
-    "budget missing": {"image_url": EXAMPLE["image_url"]},
+    "budget null": {**EXAMPLE, "budget_usd": None},
     "bad gender": {**EXAMPLE, "gender": "X"},
     "unisex not offered": {**EXAMPLE, "gender": "UNISEX"},
     "null gender": {**EXAMPLE, "gender": None},
@@ -141,6 +141,11 @@ BAD_INPUTS = {
 }
 
 
+# The schema has no regex (Finch doesn't support "pattern"), so it can't say "https only"
+# or "no spaces"; the server still refuses those.
+SERVER_ONLY = {"http URL", "space in URL", "not a URL"}
+
+
 @pytest.mark.parametrize("name", BAD_INPUTS)
 def test_invalid_input_is_422_and_the_schema_agrees(client, env, name):
     body = BAD_INPUTS[name]
@@ -148,8 +153,28 @@ def test_invalid_input_is_422_and_the_schema_agrees(client, env, name):
     assert r.status_code == 422, r.text
     jsonschema.validate(r.json(), ERROR_SCHEMA)
     assert env["calls"] == []
+    if name in SERVER_ONLY:
+        return
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(body, REQUEST_SCHEMA, format_checker=jsonschema.FormatChecker())
+
+
+def test_only_image_url_uses_the_default_budget_of_200(client, env):
+    body = {"image_url": EXAMPLE["image_url"]}
+    jsonschema.validate(body, REQUEST_SCHEMA, format_checker=jsonschema.FormatChecker())
+    r = client.post("/api/finch/plan", json=body, headers=AUTH)
+    assert r.status_code == 200, r.text
+    out = r.json()
+    jsonschema.validate(out, RESPONSE_SCHEMA, format_checker=jsonschema.FormatChecker())
+    assert out["budget_usd"] == 200 and out["total_usd"] <= 200
+    assert env["calls"][0]["max_price"] == 200 and env["calls"][0].get("gender") is None
+    assert REQUEST_SCHEMA["properties"]["budget_usd"]["default"] == finch.DEFAULT_BUDGET == 200
+
+
+def test_request_schema_has_no_pattern_and_only_image_url_is_required():
+    assert REQUEST_SCHEMA["required"] == ["image_url"]
+    assert "pattern" not in json.dumps(REQUEST_SCHEMA)
+    assert "Optional, defaults to 200" in REQUEST_SCHEMA["properties"]["budget_usd"]["description"]
 
 
 def test_body_that_is_not_json_is_422(client):
