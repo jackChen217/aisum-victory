@@ -139,15 +139,16 @@ async def fresh(url: str) -> str:
         return url
 
 
-async def save(data: bytes) -> dict:
-    """Validate and store one image. Returns {"url", "path", "content_type", "bytes"}."""
+async def save(data: bytes, max_bytes: int = MAX_BYTES) -> dict:
+    """Validate and store one image. Returns {"url", "path", "content_type", "bytes"}.
+    `max_bytes`: the Finch API stores photos up to 10 MB (src/safe_fetch.py)."""
     name = bucket_name()
     if not name:
         raise RuntimeError("UPLOAD_BUCKET is not set")
     if not data:
         raise UploadError("The upload is empty.")
-    if len(data) > MAX_BYTES:
-        raise UploadError(f"The image is larger than {MAX_BYTES // (1024 * 1024)} MB.")
+    if len(data) > max_bytes:
+        raise UploadError(f"The image is larger than {max_bytes // (1024 * 1024)} MB.")
     ext, content_type = sniff(data)
     path = f"{PREFIX}{uuid.uuid4().hex}.{ext}"
 

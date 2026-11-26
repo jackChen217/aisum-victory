@@ -18,6 +18,12 @@ items set aside, knapsack within budget). What differs:
   response is built, so Finch never grows the session store.
 - At most MAX_CONCURRENT Finch plans at once; more get 429.
 - One `ghostcart_finch` log line per call (src/usage.py), not counted by /admin/stats.
+- The caller's image_url is never handed to AISUM (SlowMist SM-AR-2026-035, SSRF):
+  we download it with src/safe_fetch.py (https only, every redirect re-checked, public
+  addresses only, 10 MB, JPEG/PNG), store it in the upload bucket (uploads/, deleted
+  after a day) and give AISUM that signed URL. A refused URL is 422
+  "image_url_rejected" with a `reason`; a failing image host is 502/504.
+  Local runs can't sign bucket URLs, so there AISUM gets the checked original URL.
 
 Schemas: docs/finch/plan.request.schema.json, plan.response.schema.json.
 """
@@ -37,7 +43,7 @@ from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from . import usage
+from . import safe_fetch, uploads, usage
 from .agent import limits, orchestrator
 from .agent.outfit import PlanTimeout
 from .agent.planner import PlanError
@@ -78,8 +84,20 @@ class FinchPlanRequest(BaseModel):
         return v
 
 
-def _error(status: int, message: str, code: str, headers: dict | None = None) -> JSONResponse:
-    return JSONResponse({"error": message, "code": code}, status_code=status, headers=headers)
+def _error(status: int, message: str, code: str, headers: dict | None = None,
+           reason: str | None = None) -> JSONResponse:
+    body = {"error": message, "code": code, **({"reason": reason} if reason else {})}
+    return JSONResponse(body, status_code=status, headers=headers)
+
+
+async def photo_url_for_aisum(image_url: str) -> str:
+    """Download the caller's photo safely and store our own copy; -> the URL AISUM gets.
+    ImageUrlRejected / ImageUpstreamError from the download."""
+    data, _ = await safe_fetch.fetch_image(image_url, max_bytes=safe_fetch.MAX_BYTES)
+    if not uploads.on_cloud_run():
+        return image_url        # local: an unsigned bucket URL would be unreadable
+    stored = await uploads.save(data, max_bytes=safe_fetch.MAX_BYTES)
+    return stored["url"]
 
 
 def _authorized(authorization: str) -> JSONResponse | None:
@@ -126,7 +144,10 @@ def to_finch(data: dict, budget: float) -> dict:
 
 
 async def _plan(req: FinchPlanRequest) -> dict:
-    data = await orchestrator.plan(FINCH_UID, req.image_url, "outfit", req.budget_usd,
+    # Inside the 110 s wait_for: download <= 15 s + upload, then the outfit search with
+    # its own 60 s deadline (which starts in orchestrator.plan, after the upload).
+    photo = await photo_url_for_aisum(req.image_url)
+    data = await orchestrator.plan(FINCH_UID, photo, "outfit", req.budget_usd,
                                    gender=req.gender, outfit_deadline_s=OUTFIT_DEADLINE_S,
                                    gender_required=False)
     # Finch never re-plans: drop the session now so Finch can't grow the store.
@@ -182,6 +203,13 @@ async def plan(request: Request, authorization: str = Header(default="")):
             result = await asyncio.wait_for(_plan(req), TOTAL_TIMEOUT_S)
         outcome, items, unmatched = "ok", len(result["items"]), len(result["unmatched"])
         return done(result)
+    except safe_fetch.ImageUrlRejected as e:
+        outcome = "image_url_rejected"
+        return done(_error(422, str(e), "image_url_rejected", reason=e.reason))
+    except safe_fetch.ImageUpstreamError as e:
+        outcome = "image_fetch_failed"
+        status = 504 if e.reason == "timeout" else 502
+        return done(_error(status, str(e), "image_fetch_failed", reason=e.reason))
     except (PlanTimeout, TimeoutError):
         outcome = "timeout"
         return done(_error(504, f"The plan did not finish within {TOTAL_TIMEOUT_S:g} "

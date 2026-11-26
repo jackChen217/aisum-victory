@@ -2,24 +2,51 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://app-103901851610.us-central1.run.app/docs/finch/plan.error.schema.json",
   "title": "GhostCart Finch API: error response (HTTP 401, 422, 429, 502, 503, 504, 500)",
-  "description": "401 missing/wrong token; 422 invalid input or no fashion items in the photo; 429 too many Finch requests at once; 502 product search failed; 503 not configured or product search rate-limited (see Retry-After); 504 timed out.",
+  "description": "401 missing/wrong token; 422 invalid input, image_url_rejected (see reason) or no fashion items in the photo; 429 too many Finch requests at once; 502 product search or the image host failed; 503 not configured or product search rate-limited (see Retry-After); 504 timed out.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["error", "code"],
+  "required": [
+    "error",
+    "code"
+  ],
   "properties": {
-    "error": {"type": "string"},
-    "code": {"type": "string"},
+    "error": {
+      "type": "string"
+    },
+    "code": {
+      "type": "string"
+    },
     "detail": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["loc", "msg"],
+        "required": [
+          "loc",
+          "msg"
+        ],
         "properties": {
-          "loc": {"type": "array", "items": {"type": ["string", "integer"]}},
-          "msg": {"type": ["string", "null"]}
+          "loc": {
+            "type": "array",
+            "items": {
+              "type": [
+                "string",
+                "integer"
+              ]
+            }
+          },
+          "msg": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         }
       }
+    },
+    "reason": {
+      "description": "With code image_url_rejected (422): not_https, bad_url, port_not_allowed, private_address, unresolvable, bad_redirect, too_many_redirects, http_status, not_image, too_large. With code image_fetch_failed (502/504): connect_failed, http_status, timeout, fetch_failed.",
+      "type": "string"
     }
   }
 }

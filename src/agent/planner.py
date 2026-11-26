@@ -658,7 +658,7 @@ def _parse_rejections(content: str, n: int) -> set[int]:
 
 async def _photo(image_url: str):
     from PIL import Image
-    data, _ = await image_proxy.fetch(image_url)
+    data, _ = await image_proxy.fetch_photo(image_url)   # safe_fetch: no SSRF
     return await asyncio.to_thread(lambda: Image.open(io.BytesIO(data)).convert("RGB"))
 
 

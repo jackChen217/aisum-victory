@@ -44,7 +44,7 @@ DETECTIONS = {"detections": [
 def env(monkeypatch):
     """Fake AISUM through the real limiter, the token set, log lines captured."""
     limits.reset()
-    state = {"calls": [], "delay": 0.0, "logs": []}
+    state = {"calls": [], "delay": 0.0, "logs": [], "downloads": []}
 
     async def search_image(url, **kw):
         async with limits.slot("search_products_by_image"):
@@ -61,6 +61,11 @@ def env(monkeypatch):
     monkeypatch.setattr(planner, "search_image", search_image)
     monkeypatch.setattr(outfit.uploads, "save", save)
     monkeypatch.setattr(planner, "_photo", photo)
+
+    async def fetch_image(url, **kw):          # the safe download (tests/test_safe_fetch.py)
+        state["downloads"].append(url)
+        return b"\xff\xd8\xff\xe0" + b"\x00" * 64, "image/jpeg"
+    monkeypatch.setattr(finch.safe_fetch, "fetch_image", fetch_image)
     monkeypatch.setattr(usage, "log_finch",
                         lambda *a, **kw: state["logs"].append((a, kw)))
     monkeypatch.setenv(finch.TOKEN_ENV, TOKEN)

@@ -64,6 +64,8 @@ Desk / Room：DeepSeek 看图拆清单 → 文字搜索 → 每个 slot 一次 L
 - 限流（`src/agent/limits.py`）：三档。网站用户排队；Finch（`limits.finch()`）也排队，但在第二条队里，空出来的名额先给排队的用户，Finch 不会在有用户排队时拿名额；后台刷新只拿没人排队的空名额。
 - 日志：每次一行 `event: ghostcart_finch`（`trigger: finch`，status、outcome、件数、耗时；没有 uid、邮箱、图片链接、token），`/admin/stats` 只数 `ghostcart_plan`，所以不算用户搜索。
 - 本地裁剪重搜会失败（签不了名，见图片上传），所以本地结果是只用第一次搜索的结果；Cloud Run 上正常。
+- SSRF 修复（SlowMist SM-AR-2026-035）：用户给的 `image_url` **不再交给 AISUM**。Finch 先用 `src/safe_fetch.py` 下载（只许 https 和 443 端口、不能带账号密码；手动跟随跳转最多 3 次且每跳重新校验、禁止降级到 http；域名解析出的每个 IP 都必须是公网，拒绝私网/环回/链路本地/元数据 169.254.169.254 和 fd00:ec2::254/0.0.0.0/组播/保留/CGNAT/IPv6 里嵌的 IPv4；连接用校验过的 IP，TLS 仍按域名验证证书（防 DNS rebinding）；不用环境变量里的代理；连接 5 秒、总共 15 秒、最大 10MB；Content-Type 和文件头都必须是 JPEG/PNG），再存到 bucket `uploads/`（1 天删除），把签名链接给 AISUM。链接被拒 → 422 `image_url_rejected` + `reason`；图片主机出错 → 502（超时 504）`image_fetch_failed`。本地签不了名，所以本地把校验过的原链接给 AISUM。
+- 同一个下载函数也用在裁剪重搜下载原图（`planner._photo`，只收 JPEG/PNG）、Lookboard 和对照图代理（`image_proxy.fetch`，商品图还允许 WebP/GIF/AVIF）。`uploads.fresh` 只给自己 bucket 的链接重签名，不下载。网站 `/api/plan` 手填的图片链接仍然直接交给 AISUM（页面通常用上传或 Gallery，都是自己的链接）。
 
 ## Finch 悬赏任务：来源和完成码（`src/finch_task.py`、`static/source.js`）
 
